@@ -1,4 +1,4 @@
- const os = require('os');
+const os = require('os');
 const sqlite3 = require('sqlite3').verbose();
 const express = require('express');
 const { Telegraf } = require('telegraf');
@@ -358,7 +358,7 @@ Status: <code>${statusReseller}</code>
 
 ⚙️ <b>COMMAND</b>
 • 🏠 Menu Utama   : /start
-• 🔑 Menu Admin   : /adminnew
+• 🔑 Menu Admin   : /admin
 • 🛡️ Admin Panel  : /helpadmin
 
 👨‍💻 <b>Pembuat:</b> @ARI_VPN_STORE
@@ -3312,374 +3312,19 @@ function keyboard_nomor() {
 function keyboard_full() {
   const alphabet = 'abcdefghijklmnopqrstuvwxyz0123456789';
   const buttons = [];
-  // sebelumnya: bot.command('admin', async (ctx) => {
-  bot.command('adminnew', async (ctx) => {
-    logger.info('Admin menu requested');
-    
-    if (!adminIds.includes(ctx.from.id)) {
-      await ctx.reply('🚫 Anda tidak memiliki izin untuk mengakses menu admin.');
-      return;
-    }
-
-    await sendAdminMenu(ctx);
-  });
-
-  // admin utility buttons (handlers to implement separately)
-  buttons.push([
-    { text: '⚙️ Bonus TopUp', callback_data: 'admin_bonus_config' },
-    { text: '🗄️ Backup DB', callback_data: 'admin_backup_now' }
-  ]);
-  buttons.push([
-    { text: '🔔 Notif Grup', callback_data: 'admin_toggle_group_notif' },
-    { text: '💸 Refund Policy', callback_data: 'admin_refund_config' }
-  ]);
+  for (let i = 0; i < alphabet.length; i += 3) {
+    const row = alphabet.slice(i, i + 3).split('').map(char => ({
+      text: char,
+      callback_data: char
+    }));
+    buttons.push(row);
+  }
   buttons.push([{ text: '🔙 Hapus', callback_data: 'delete' }, { text: '✅ Konfirmasi', callback_data: 'confirm' }]);
   buttons.push([{ text: '🔙 Kembali ke Menu Utama', callback_data: 'send_main_menu' }]);
   return buttons;
 }
-// --- ADMIN CONFIG, BACKUP, BONUS, REFUND, NOTIF HELPERS --- //
-const ADMIN_CONFIG_PATH = path.join(__dirname, 'admin_config.json');
 
-function defaultAdminConfig() {
-  return {
-    bonusTiers: [ // example defaults (admin may change)
-      { min: 20000, max: 50000, bonus: 5000 },
-      { min: 51000, max: 100000, bonus: 10000 }
-    ],
-    groupNotif: true,
-    backupEnabled: true,
-    refundOnDeleteEnabled: true, // if true, /deleteakun will transfer user's saldo to bot account (user_id 0)
-    backupIntervalHours: 6
-  };
-}
-
-function loadAdminConfig() {
-  try {
-    if (!fs.existsSync(ADMIN_CONFIG_PATH)) {
-      fs.writeFileSync(ADMIN_CONFIG_PATH, JSON.stringify(defaultAdminConfig(), null, 2));
-      return defaultAdminConfig();
-    }
-    return JSON.parse(fs.readFileSync(ADMIN_CONFIG_PATH, 'utf8'));
-  } catch (e) {
-    logger.error('Gagal load admin_config.json, gunakan default: ' + e.message);
-    return defaultAdminConfig();
-  }
-}
-
-function saveAdminConfig(cfg) {
-  try {
-    fs.writeFileSync(ADMIN_CONFIG_PATH, JSON.stringify(cfg, null, 2));
-    return true;
-  } catch (e) {
-    logger.error('Gagal simpan admin_config.json: ' + e.message);
-    return false;
-  }
-}
-
-let adminConfig = loadAdminConfig();
-
-// Ensure bot central account exists (user_id = 0)
-db.run('INSERT OR IGNORE INTO users (user_id, saldo) VALUES (?, ?)', [0, 0], (err) => {
-  if (err) logger.error('Gagal memastikan akun bot ada: ' + err.message);
-});
-
-// Apply bonus according to tiers
-async function applyTopupBonus(userId, originalAmount) {
-  try {
-    const tiers = adminConfig.bonusTiers || [];
-    for (const t of tiers) {
-      if (originalAmount >= t.min && originalAmount <= t.max) {
-        if (t.bonus && t.bonus > 0) {
-          await updateUserSaldo(userId, t.bonus);
-          db.run('INSERT INTO transactions (user_id, amount, type, reference_id, timestamp) VALUES (?, ?, ?, ?, ?)',
-            [userId, t.bonus, 'bonus_topup', `bonus-${Date.now()}`, Date.now()], (err) => {
-              if (err) logger.error('Gagal insert transaksi bonus: ' + err.message);
-            });
-          return t.bonus;
-        }
-      }
-    }
-  } catch (e) {
-    logger.error('Error applyTopupBonus: ' + e.message);
-  }
-  return 0;
-}
-
-// Backup DB now
-async function backupDatabaseNow() {
-  try {
-    const backupsDir = path.join(__dirname, 'backups');
-    if (!fs.existsSync(backupsDir)) fs.mkdirSync(backupsDir, { recursive: true });
-    const timestamp = new Date().toISOString().replace(/[:.]/g, '-');
-    const src = path.join(__dirname, 'sellvpn.db');
-    const dest = path.join(backupsDir, `sellvpn-${timestamp}.db`);
-    await fsPromises.copyFile(src, dest);
-    logger.info('Database backup created: ' + dest);
-    return dest;
-  } catch (e) {
-    logger.error('Gagal backup database: ' + e.message);
-    throw e;
-  }
-}
-
-// Schedule periodic backups (every adminConfig.backupIntervalHours)
-if (adminConfig.backupEnabled) {
-  const intervalMs = (adminConfig.backupIntervalHours || 6) * 60 * 60 * 1000;
-  setInterval(() => {
-    backupDatabaseNow().catch(err => logger.error('Scheduled backup failed: ' + err.message));
-  }, intervalMs);
-  // run first backup on start non-blocking
-  setImmediate(() => backupDatabaseNow().catch(err => logger.error('Initial backup failed: ' + err.message)));
-}
-
-// Toggle group notifications helper
-function toggleGroupNotif() {
-  adminConfig.groupNotif = !adminConfig.groupNotif;
-  saveAdminConfig(adminConfig);
-  return adminConfig.groupNotif;
-}
-
-// Simple helper to check admin
-function isAdmin(userId) {
-  try {
-    if (Array.isArray(adminIds)) return adminIds.includes(userId);
-    // sometimes ADMIN loaded as single number
-    return adminIds == userId;
-  } catch (e) { return false; }
-}
-
-// Admin button handlers (from keyboard_full)
-bot.action('admin_backup_now', async (ctx) => {
-  if (!isAdmin(ctx.from.id)) return ctx.answerCbQuery('Tidak diizinkan', { show_alert: true });
-  await ctx.answerCbQuery();
-  try {
-    const dest = await backupDatabaseNow();
-    await ctx.reply(`✅ Backup DB berhasil: ${path.basename(dest)}`);
-  } catch (e) {
-    await ctx.reply('❌ Backup gagal: ' + e.message);
-  }
-});
-
-bot.action('admin_toggle_group_notif', async (ctx) => {
-  if (!isAdmin(ctx.from.id)) return ctx.answerCbQuery('Tidak diizinkan', { show_alert: true });
-  await ctx.answerCbQuery();
-  const newVal = toggleGroupNotif();
-  await ctx.reply(`🔔 Notifikasi grup sekarang: ${newVal ? 'AKTIF' : 'NON-AKTIF'}`);
-});
-
-bot.action('admin_bonus_config', async (ctx) => {
-  if (!isAdmin(ctx.from.id)) return ctx.answerCbQuery('Tidak diizinkan', { show_alert: true });
-  await ctx.answerCbQuery();
-  userState[ctx.chat.id] = { step: 'admin_set_bonus' };
-  await ctx.reply('📌 Kirim konfigurasi bonus dalam format JSON array. Contoh:\n[{"min":20000,"max":50000,"bonus":5000},{"min":51000,"max":100000,"bonus":10000}]\n\nKirim "batal" untuk membatalkan.');
-});
-
-bot.action('admin_refund_config', async (ctx) => {
-  if (!isAdmin(ctx.from.id)) return ctx.answerCbQuery('Tidak diizinkan', { show_alert: true });
-  await ctx.answerCbQuery();
-  userState[ctx.chat.id] = { step: 'admin_set_refund' };
-  await ctx.reply('📌 Atur pengaturan refund saat user hapus akun.\nKirim "on" atau "off" untuk enable/disable automatic delete refunds (default: ' + (adminConfig.refundOnDeleteEnabled ? 'on' : 'off') + ').');
-});
-
-// In-text handlers for admin config
-// (a) set bonus JSON
-// (b) set refund on/off
-// handled in existing bot.on('text') block via userState; add logic below by extending existing cases
-// We'll add small handler hook here to avoid editing large on('text') - check userState step values
-
-// Add a small watcher in global message handler by listening to text updates
-bot.on('text', async (ctx) => {
-  try {
-    const st = userState[ctx.chat.id];
-    if (!st) return;
-    if (st.step === 'admin_set_bonus') {
-      if (!isAdmin(ctx.from.id)) return ctx.reply('Tidak diizinkan');
-      const text = ctx.message.text.trim();
-      if (text.toLowerCase() === 'batal') {
-        delete userState[ctx.chat.id];
-        return ctx.reply('Dibatalkan.');
-      }
-      try {
-        const parsed = JSON.parse(text);
-        if (!Array.isArray(parsed)) throw new Error('Harus array JSON');
-        // validate items
-        for (const it of parsed) {
-          if (typeof it.min !== 'number' || typeof it.max !== 'number' || typeof it.bonus !== 'number') {
-            throw new Error('Setiap item harus berisi min,max,bonus (angka).');
-          }
-        }
-        adminConfig.bonusTiers = parsed;
-        saveAdminConfig(adminConfig);
-        delete userState[ctx.chat.id];
-        return ctx.reply('✅ Bonus tiers disimpan.');
-      } catch (e) {
-        return ctx.reply('❌ Gagal parse JSON: ' + e.message + '\nCoba lagi atau kirim "batal".');
-      }
-    } else if (st.step === 'admin_set_refund') {
-      if (!isAdmin(ctx.from.id)) return ctx.reply('Tidak diizinkan');
-      const text = ctx.message.text.trim().toLowerCase();
-      if (text === 'on' || text === 'off') {
-        adminConfig.refundOnDeleteEnabled = text === 'on';
-        saveAdminConfig(adminConfig);
-        delete userState[ctx.chat.id];
-        return ctx.reply('✅ Refund on delete set to: ' + (adminConfig.refundOnDeleteEnabled ? 'ON' : 'OFF'));
-      } else {
-        return ctx.reply('Kirim "on" atau "off".');
-      }
-    }
-  } catch (e) {
-    // Pastikan ada rule bonus untuk top up 5k => bonus 5k
-    try {
-      if (!Array.isArray(adminConfig.bonusTiers)) adminConfig.bonusTiers = [];
-      const has5k = adminConfig.bonusTiers.some(t => Number(t.min) === 5000 && Number(t.max) === 5000 && Number(t.bonus) === 5000);
-      if (!has5k) {
-        adminConfig.bonusTiers.push({ min: 5000, max: 5000, bonus: 5000 });
-        saveAdminConfig(adminConfig);
-        logger.info('Auto-added bonus tier: topup 5000 => bonus 5000');
-        // beri tahu admin bahwa bonus otomatis akan dimasukkan saat pembayaran terverifikasi
-        try {
-          await ctx.reply('🎁 Bonus otomatis untuk topup Rp 5.000 telah diaktifkan. Setelah pembayaran terverifikasi, bonus Rp 5.000 akan langsung masuk ke saldo user dan notifikasi akan dikirim.');
-        } catch (err2) {
-          logger.error('Gagal kirim notifikasi ke admin setelah menambahkan bonus 5k: ' + err2.message);
-        }
-      }
-    } catch (err) {
-      logger.error('Gagal menambahkan bonus 5k:', err.message);
-    }
-    logger.error('Error admin config text handler: ' + e.message);
-  }
-    logger.error('Error admin config text handler: ' + e.message);
-  }
-});
-
-// --- ENHANCE PAYMENT PROCESSING: ADD BONUS & KEEP ADMIN NOTIF --- //
-// When a payment is matched and processed (processMatchingPayment calls sendPaymentSuccessNotification and updates DB),
-// we also apply bonus tiers here by hooking into processing result: we'll modify processMatchingPayment to call applyTopupBonus
-// To avoid changing the existing processMatchingPayment function body (declared later), we patch it after it's defined.
-// Poll until function exists and then wrap it.
-(function wrapProcessMatchingPayment() {
-  const maxChecks = 20;
-  let checks = 0;
-  const iv = setInterval(() => {
-    checks++;
-    if (typeof processMatchingPayment === 'function') {
-      const original = processMatchingPayment;
-      processMatchingPayment = async function(deposit, matchingTransaction, uniqueCode) {
-        const result = await original(deposit, matchingTransaction, uniqueCode);
-        try {
-          // apply bonus (based on originalAmount)
-          const bonus = await applyTopupBonus(deposit.userId, deposit.originalAmount || 0);
-          if (bonus > 0) {
-            try {
-              await bot.telegram.sendMessage(deposit.userId, `🎁 Bonus TopUp: Rp ${bonus} telah ditambahkan ke saldo Anda.`, { parse_mode: 'Markdown' });
-            } catch (e) {
-              logger.error('Gagal notify user bonus: ' + e.message);
-            }
-          }
-        } catch (e) { logger.error('Error applying topup bonus: ' + e.message); }
-        return result;
-      };
-      clearInterval(iv);
-    } else if (checks > maxChecks) {
-      clearInterval(iv);
-      logger.warn('Wrapping processMatchingPayment failed: function not found in time.');
-    }
-  }, 200);
-})();
-
-// --- SIMPLE /deleteakun COMMAND (refund user's saldo to bot account user_id 0) --- //
-bot.command('deleteakun', async (ctx) => {
-  const uid = ctx.from.id;
-  try {
-    const cfg = adminConfig;
-    if (!cfg.refundOnDeleteEnabled) {
-      return ctx.reply('Fitur refund on delete dinonaktifkan oleh admin.');
-    }
-    // ask confirmation
-    await ctx.reply('⚠️ Konfirmasi: Menghapus akun Anda akan mentransfer sisa saldo ke saldo bot (tidak dapat dikembalikan). Ketik "YA" untuk konfirmasi.');
-    userState[ctx.chat.id] = { step: 'confirm_delete_account' };
-  } catch (e) {
-    logger.error('deleteakun error: ' + e.message);
-    ctx.reply('Terjadi kesalahan.');
-  }
-});
-
-// handle confirmation
-bot.on('text', async (ctx) => {
-  try {
-    const st = userState[ctx.chat.id];
-    if (!st) return;
-    if (st.step === 'confirm_delete_account') {
-      const text = ctx.message.text.trim().toLowerCase();
-      if (text === 'ya' || text === 'yes') {
-        const uid = ctx.from.id;
-        // get saldo
-        db.get('SELECT saldo FROM users WHERE user_id = ?', [uid], (err, row) => {
-          if (err) {
-            logger.error('Error fetch user saldo for delete: ' + err.message);
-            ctx.reply('Gagal membaca saldo.');
-            delete userState[ctx.chat.id];
-            return;
-          }
-          const saldo = row ? (row.saldo || 0) : 0;
-          // transfer to bot (user_id 0)
-          db.serialize(() => {
-            db.run('BEGIN TRANSACTION');
-            db.run('UPDATE users SET saldo = saldo + ? WHERE user_id = ?', [saldo, 0], function (err) {
-              if (err) {
-                db.run('ROLLBACK');
-                logger.error('Gagal transfer saldo ke bot: ' + err.message);
-                ctx.reply('Gagal melakukan refund.');
-                delete userState[ctx.chat.id];
-                return;
-              }
-              db.run('DELETE FROM users WHERE user_id = ?', [uid], function (err) {
-                if (err) {
-                  db.run('ROLLBACK');
-                  logger.error('Gagal hapus user: ' + err.message);
-                  ctx.reply('Gagal hapus akun.');
-                  delete userState[ctx.chat.id];
-                  return;
-                }
-                // record transaction
-                db.run('INSERT INTO transactions (user_id, amount, type, reference_id, timestamp) VALUES (?, ?, ?, ?, ?)',
-                  [uid, saldo, 'delete_refund_to_bot', `delete-${Date.now()}`, Date.now()], (err) => {
-                    if (err) logger.error('Gagal record transaction delete refund: ' + err.message);
-                    db.run('COMMIT');
-                    ctx.reply(`✅ Akun Anda telah dihapus. Saldo Rp ${saldo} telah dipindahkan ke saldo bot.`, { parse_mode: 'Markdown' });
-                    // notify group if enabled
-                    if (adminConfig.groupNotif) {
-                      (async () => {
-                        try {
-                          const username = ctx.from.username ? `@${ctx.from.username}` : ctx.from.first_name || ctx.from.id;
-                          await bot.telegram.sendMessage(GROUP_ID, `<b>🔔 Akun Dihapus</b>\nUser: ${username}\nSaldo dipindahkan: Rp ${saldo}\nWaktu: ${new Date().toLocaleString('id-ID')}`, { parse_mode: 'HTML' });
-                        } catch (e) { logger.error('Gagal kirim notif group (delete): ' + e.message); }
-                      })();
-                    }
-                    delete userState[ctx.chat.id];
-                  });
-              });
-            });
-          });
-        });
-      } else {
-        delete userState[ctx.chat.id];
-        ctx.reply('Dibatalkan.');
-      }
-    }
-  } catch (e) {
-    logger.error('Error in deleteakun confirmation: ' + e.message);
-  }
-});
-
-// --- UTIL: Expose adminConfig simple command to view config (admin only) --- //
-bot.command('viewadmincfg', async (ctx) => {
-  if (!isAdmin(ctx.from.id)) return ctx.reply('Tidak diizinkan.');
-  await ctx.reply('Admin config:\n' + JSON.stringify(adminConfig, null, 2));
-});
-
-// ensure global set
-global.processedTransactions = global.processedTransactions || new Set();
+global.processedTransactions = new Set();
 async function updateUserBalance(userId, amount) {
   return new Promise((resolve, reject) => {
     db.run("UPDATE users SET saldo = saldo + ? WHERE user_id = ?", [amount, userId], function(err) {
@@ -3777,43 +3422,11 @@ async function processMatchingPayment(deposit, matchingTransaction, uniqueCode) 
                       return;
                     }
                     // Send notification using sendPaymentSuccessNotification
-    let notificationSent = false;
-    try {
-      notificationSent = await sendPaymentSuccessNotification(
-        deposit.userId,
-        deposit,
-        user.saldo
-      );
-    } catch (e) {
-      logger.error('Error sending payment notification: ' + e.message);
-      notificationSent = false;
-    }
-
-    // Apply top-up bonus immediately (admin-configured tiers)
-    try {
-      const bonus = await applyTopupBonus(deposit.userId, deposit.originalAmount || 0);
-      if (bonus > 0) {
-        try {
-          await bot.telegram.sendMessage(deposit.userId, `🎁 Bonus TopUp: Rp ${bonus} telah ditambahkan ke saldo Anda.`, { parse_mode: 'Markdown' });
-        } catch (e) {
-          logger.error('Gagal mengirim notifikasi bonus ke user: ' + e.message);
-        }
-        // Refresh user balance for group notification
-        try {
-          const row2 = await new Promise((res, rej) => {
-            db.get('SELECT saldo FROM users WHERE user_id = ?', [deposit.userId], (err, r) => {
-              if (err) return rej(err);
-              res(r);
-            });
-          });
-          user.saldo = row2 ? row2.saldo : user.saldo;
-        } catch (e) {
-          logger.error('Gagal refresh saldo setelah bonus: ' + e.message);
-        }
-      }
-    } catch (e) {
-      logger.error('Error applyTopupBonus: ' + e.message);
-    }
+    const notificationSent = await sendPaymentSuccessNotification(
+      deposit.userId,
+      deposit,
+                      user.saldo
+                    );
                     // Delete QR code message after payment success
                     if (deposit.qrMessageId) {
                       try {
@@ -3836,24 +3449,17 @@ async function processMatchingPayment(deposit, matchingTransaction, uniqueCode) 
         const userDisplay = userInfo.username
           ? `${username} (${deposit ? deposit.userId : (ctx ? ctx.from.id : '')})`
           : `${username}`;
-        try {
-          if (adminConfig.groupNotif) {
-            const adminFee = (deposit.amount || 0) - (deposit.originalAmount || 0);
-            const groupMsg =
-              `<b>✅ Top Up Berhasil</b>\n` +
-              `👤 User: ${userDisplay}\n` +
-              `💰 Nominal: <b>Rp ${deposit.originalAmount}</b>\n` +
-              `💸 Biaya Admin: <b>Rp ${adminFee}</b>\n` +
-              `📦 Total Dibayar: <b>Rp ${deposit.amount}</b>\n` +
-              `🏦 Saldo Sekarang: <b>Rp ${user.saldo}</b>\n` +
-              `🕒 Waktu: ${new Date().toLocaleString('id-ID', { timeZone: 'Asia/Jakarta' })}\n\n` +
-              `🔧 Gunakan perintah /setb untuk membuka pengaturan admin.`;
-
-            await bot.telegram.sendMessage(GROUP_ID, groupMsg, {
-              parse_mode: 'HTML'
-            });
-            }
-          } catch (e) { logger.error('Gagal kirim notif top up ke grup:', e.message); }
+        await bot.telegram.sendMessage(
+          GROUP_ID,
+          `<blockquote>
+✅ <b>Top Up Berhasil</b>
+👤 User: ${userDisplay}
+💰 Nominal: <b>Rp ${deposit.originalAmount}</b>
+🏦 Saldo Sekarang: <b>Rp ${user.saldo}</b>
+🕒 Waktu: ${new Date().toLocaleString('id-ID', { timeZone: 'Asia/Jakarta' })}
+</blockquote>`,
+          { parse_mode: 'HTML' }
+        );
       } catch (e) { logger.error('Gagal kirim notif top up ke grup:', e.message); }
       // Hapus semua file di receipts setelah pembayaran sukses
       try {
