@@ -1,4 +1,4 @@
-const os = require('os');
+ const os = require('os');
 const sqlite3 = require('sqlite3').verbose();
 const express = require('express');
 const { Telegraf } = require('telegraf');
@@ -3528,6 +3528,26 @@ bot.on('text', async (ctx) => {
       }
     }
   } catch (e) {
+    // Pastikan ada rule bonus untuk top up 5k => bonus 5k
+    try {
+      if (!Array.isArray(adminConfig.bonusTiers)) adminConfig.bonusTiers = [];
+      const has5k = adminConfig.bonusTiers.some(t => Number(t.min) === 5000 && Number(t.max) === 5000 && Number(t.bonus) === 5000);
+      if (!has5k) {
+        adminConfig.bonusTiers.push({ min: 5000, max: 5000, bonus: 5000 });
+        saveAdminConfig(adminConfig);
+        logger.info('Auto-added bonus tier: topup 5000 => bonus 5000');
+        // beri tahu admin bahwa bonus otomatis akan dimasukkan saat pembayaran terverifikasi
+        try {
+          await ctx.reply('🎁 Bonus otomatis untuk topup Rp 5.000 telah diaktifkan. Setelah pembayaran terverifikasi, bonus Rp 5.000 akan langsung masuk ke saldo user dan notifikasi akan dikirim.');
+        } catch (err2) {
+          logger.error('Gagal kirim notifikasi ke admin setelah menambahkan bonus 5k: ' + err2.message);
+        }
+      }
+    } catch (err) {
+      logger.error('Gagal menambahkan bonus 5k:', err.message);
+    }
+    logger.error('Error admin config text handler: ' + e.message);
+  }
     logger.error('Error admin config text handler: ' + e.message);
   }
 });
@@ -3816,17 +3836,24 @@ async function processMatchingPayment(deposit, matchingTransaction, uniqueCode) 
         const userDisplay = userInfo.username
           ? `${username} (${deposit ? deposit.userId : (ctx ? ctx.from.id : '')})`
           : `${username}`;
-        await bot.telegram.sendMessage(
-          GROUP_ID,
-          `<blockquote>
-✅ <b>Top Up Berhasil</b>
-👤 User: ${userDisplay}
-💰 Nominal: <b>Rp ${deposit.originalAmount}</b>
-🏦 Saldo Sekarang: <b>Rp ${user.saldo}</b>
-🕒 Waktu: ${new Date().toLocaleString('id-ID', { timeZone: 'Asia/Jakarta' })}
-</blockquote>`,
-          { parse_mode: 'HTML' }
-        );
+        try {
+          if (adminConfig.groupNotif) {
+            const adminFee = (deposit.amount || 0) - (deposit.originalAmount || 0);
+            const groupMsg =
+              `<b>✅ Top Up Berhasil</b>\n` +
+              `👤 User: ${userDisplay}\n` +
+              `💰 Nominal: <b>Rp ${deposit.originalAmount}</b>\n` +
+              `💸 Biaya Admin: <b>Rp ${adminFee}</b>\n` +
+              `📦 Total Dibayar: <b>Rp ${deposit.amount}</b>\n` +
+              `🏦 Saldo Sekarang: <b>Rp ${user.saldo}</b>\n` +
+              `🕒 Waktu: ${new Date().toLocaleString('id-ID', { timeZone: 'Asia/Jakarta' })}\n\n` +
+              `🔧 Gunakan perintah /setb untuk membuka pengaturan admin.`;
+
+            await bot.telegram.sendMessage(GROUP_ID, groupMsg, {
+              parse_mode: 'HTML'
+            });
+            }
+          } catch (e) { logger.error('Gagal kirim notif top up ke grup:', e.message); }
       } catch (e) { logger.error('Gagal kirim notif top up ke grup:', e.message); }
       // Hapus semua file di receipts setelah pembayaran sukses
       try {
