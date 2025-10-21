@@ -1,4 +1,4 @@
- // Full app.js — gabungan fitur lama + bonus top-up/admin
+ // Full app.js — fitur lama + bonus top-up/admin (lengkap dan dirapikan)
 const os = require('os');
 const sqlite3 = require('sqlite3').verbose();
 const express = require('express');
@@ -9,6 +9,7 @@ const { buildPayload, headers, API_URL } = require('./api-cekpayment-orkut');
 const winston = require('winston');
 const fsPromises = require('fs/promises');
 const path = require('path');
+const fs = require('fs');
 
 const logger = winston.createLogger({
   level: 'info',
@@ -28,7 +29,7 @@ if (process.env.NODE_ENV !== 'production') {
 app.use(express.json());
 app.use(express.urlencoded({ extended: true }));
 
-// Modules (original project uses these; keep requires so existing code still works)
+// Modules (project modules)
 const {
   createssh, createvmess, createvless, createtrojan, createshadowsocks
 } = require('./modules/create');
@@ -53,8 +54,7 @@ const {
   unlockssh, unlockvmess, unlockvless, unlocktrojan, unlockshadowsocks
 } = require('./modules/unlock');
 
-// basic files & vars
-const fs = require('fs');
+// load .vars.json
 const VARS_PATH = path.join(__dirname, '.vars.json');
 if (!fs.existsSync(VARS_PATH)) {
   logger.error('.vars.json not found. Buat file .vars.json di direktori project.');
@@ -64,7 +64,7 @@ const vars = JSON.parse(fs.readFileSync(VARS_PATH, 'utf8'));
 
 const BOT_TOKEN = vars.BOT_TOKEN;
 const port = vars.PORT || 6969;
-const ADMIN = vars.USER_ID; // bisa single id atau array
+const ADMIN = vars.USER_ID; // single or array
 const NAMA_STORE = vars.NAMA_STORE || '@ARI_VPN_STORE';
 const DATA_QRIS = vars.DATA_QRIS;
 const MERCHANT_ID = vars.MERCHANT_ID;
@@ -73,13 +73,13 @@ const GROUP_ID = vars.GROUP_ID || null;
 
 const bot = new Telegraf(BOT_TOKEN);
 
-// normalize adminIds to array
+// Normalize admin ids
 const adminIds = Array.isArray(ADMIN) ? ADMIN.map(Number) : [Number(ADMIN)];
 function isAdmin(id) { return adminIds.includes(Number(id)); }
 
 logger.info('Bot initialized');
 
-// === START: admin-config (bonus) ===
+// === admin-config (bonus) ===
 const ADMIN_CONFIG_PATH = path.join(__dirname, 'admin-config.json');
 let adminConfig = {
   bonusEnabled: true,
@@ -110,14 +110,14 @@ function saveAdminConfig() {
   }
 }
 loadAdminConfig();
-// === END: admin-config (bonus) ===
+// === end admin-config ===
 
 const db = new sqlite3.Database(path.join(__dirname, 'sellvpn.db'), (err) => {
   if (err) logger.error('Kesalahan koneksi SQLite3:', err.message);
   else logger.info('Terhubung ke SQLite3');
 });
 
-// create necessary tables if missing
+// create tables
 db.run(`CREATE TABLE IF NOT EXISTS pending_deposits (
   unique_code TEXT PRIMARY KEY,
   user_id INTEGER,
@@ -141,13 +141,13 @@ db.run(`CREATE TABLE IF NOT EXISTS transactions (
   timestamp INTEGER
 )`);
 
-// ensure processed/pending sets
+// global helpers
 global.processedTransactions = global.processedTransactions || new Set();
 global.pendingDeposits = global.pendingDeposits || {};
 
-// helper user-state
 const userState = {};
 const trialFile = path.join(__dirname, 'trial.db');
+
 async function checkTrialAccess(userId) {
   try {
     const data = await fsPromises.readFile(trialFile, 'utf8');
@@ -165,23 +165,13 @@ async function saveTrialAccess(userId) {
   await fsPromises.writeFile(trialFile, JSON.stringify(trialData, null, 2));
 }
 
-// simple admin menu (can be expanded)
+// admin menu
 async function sendAdminMenu(ctx) {
   const txt = `🔐 Admin Menu\n\nGunakan /helpadmin untuk daftar perintah.`;
   return ctx.reply(txt);
 }
 
-// --- Basic bot commands ---
-bot.start(async (ctx) => {
-  const userId = ctx.from.id;
-  db.get('SELECT * FROM users WHERE user_id = ?', [userId], (err, row) => {
-    if (err) { logger.error('DB error on start:', err.message); }
-    if (!row) db.run('INSERT INTO users (user_id) VALUES (?)', [userId]);
-  });
-  await sendMainMenu(ctx);
-});
-bot.command('menu', async (ctx) => sendMainMenu(ctx));
-
+// main menu
 async function sendMainMenu(ctx) {
   const userId = ctx.from.id;
   const userName = ctx.from.first_name || '-';
@@ -204,7 +194,26 @@ async function sendMainMenu(ctx) {
   try { await ctx.reply(messageText, keyboard); } catch (e) { logger.error('Error sendMainMenu:', e.message); }
 }
 
-// admin command
+// record account transaction
+async function recordAccountTransaction(userId, type) {
+  return new Promise((resolve, reject) => {
+    const referenceId = `account-${type}-${userId}-${Date.now()}`;
+    db.run('INSERT INTO transactions (user_id, type, reference_id, timestamp) VALUES (?, ?, ?, ?)',
+      [userId, type, referenceId, Date.now()], (err) => err ? reject(err) : resolve());
+  });
+}
+
+// bot commands
+bot.start(async (ctx) => {
+  const userId = ctx.from.id;
+  db.get('SELECT * FROM users WHERE user_id = ?', [userId], (err, row) => {
+    if (err) { logger.error('DB error on start:', err.message); }
+    if (!row) db.run('INSERT INTO users (user_id) VALUES (?)', [userId]);
+  });
+  await sendMainMenu(ctx);
+});
+bot.command('menu', async (ctx) => sendMainMenu(ctx));
+
 bot.command('admin', async (ctx) => {
   if (!isAdmin(ctx.from.id)) return ctx.reply('🚫 Anda tidak memiliki izin untuk mengakses menu admin.');
   await sendAdminMenu(ctx);
@@ -216,7 +225,6 @@ bot.command('helpadmin', async (ctx) => {
   return ctx.reply(helpMessage);
 });
 
-// bonus admin commands
 bot.command('getbonus', async (ctx) => {
   if (!isAdmin(ctx.from.id)) return ctx.reply('Tidak ada izin!');
   const status = adminConfig.bonusEnabled ? 'ON' : 'OFF';
@@ -241,7 +249,6 @@ bot.command('setbonus', async (ctx) => {
   return ctx.reply(`Berhasil set bonus. Threshold: Rp ${thresh}, Bonus: Rp ${amt}`);
 });
 
-// broadcast
 bot.command('broadcast', async (ctx) => {
   if (!isAdmin(ctx.from.id)) return ctx.reply('Tidak ada izin');
   const message = ctx.message.reply_to_message ? ctx.message.reply_to_message.text : ctx.message.text.split(' ').slice(1).join(' ');
@@ -255,7 +262,6 @@ bot.command('broadcast', async (ctx) => {
   });
 });
 
-// addsaldo
 bot.command('addsaldo', async (ctx) => {
   if (!isAdmin(ctx.from.id)) return ctx.reply('Tidak ada izin');
   const parts = ctx.message.text.split(' ');
@@ -272,7 +278,7 @@ bot.command('addsaldo', async (ctx) => {
   });
 });
 
-// --- Payment handling helpers (processMatchingPayment, sendPaymentSuccessNotification) ---
+// Payment helpers
 async function sendPaymentSuccessNotification(userId, deposit, currentBalance, bonus = 0) {
   try {
     const adminFee = (Number(deposit.amount || 0) - Number(deposit.original_amount || deposit.originalAmount || 0)) || 0;
@@ -291,7 +297,8 @@ async function sendPaymentSuccessNotification(userId, deposit, currentBalance, b
   }
 }
 
-async function processMatchingPayment(deposit, matchingTransaction, uniqueCode) {
+async function processMatchingPayment(depositRow, matchingTransaction, uniqueCode) {
+  // depositRow fields from DB: unique_code, user_id, amount, original_amount, timestamp, status
   const amountKey = matchingTransaction.kredit || matchingTransaction.amount || 0;
   const transactionKey = `${matchingTransaction.reference_id || uniqueCode}_${amountKey}`;
 
@@ -307,39 +314,40 @@ async function processMatchingPayment(deposit, matchingTransaction, uniqueCode) 
         if (err) { db.run('ROLLBACK'); logger.error('Error checking transaction:', err.message); return reject(err); }
         if (row) { db.run('ROLLBACK'); logger.info('Transaction exists, skip'); return resolve(false); }
 
-        const originalAmount = Number(deposit.original_amount || deposit.originalAmount || 0);
+        const originalAmount = Number(depositRow.original_amount || depositRow.originalAmount || depositRow.amount || 0);
         const bonusToApply = (adminConfig.bonusEnabled && originalAmount >= (adminConfig.bonusThreshold || 0)) ? Number(adminConfig.bonusAmount || 0) : 0;
         const totalCredit = originalAmount + bonusToApply;
+        const uid = depositRow.user_id;
 
-        db.run('UPDATE users SET saldo = saldo + ? WHERE user_id = ?', [totalCredit, deposit.user_id || deposit.userId], function (err) {
+        db.run('UPDATE users SET saldo = saldo + ? WHERE user_id = ?', [totalCredit, uid], function (err) {
           if (err) { db.run('ROLLBACK'); logger.error('Error updating balance:', err.message); return reject(err); }
 
           db.run('INSERT INTO transactions (user_id, amount, type, reference_id, timestamp) VALUES (?, ?, ?, ?, ?)',
-            [deposit.user_id || deposit.userId, originalAmount, 'deposit', matchingTransaction.reference_id || uniqueCode, Date.now()], (err) => {
+            [uid, originalAmount, 'deposit', matchingTransaction.reference_id || uniqueCode, Date.now()], (err) => {
               if (err) { db.run('ROLLBACK'); logger.error('Error recording deposit txn:', err.message); return reject(err); }
 
               const recordBonus = (bonusToApply > 0) ? new Promise((res, rej) => {
                 db.run('INSERT INTO transactions (user_id, amount, type, reference_id, timestamp) VALUES (?, ?, ?, ?, ?)',
-                  [deposit.user_id || deposit.userId, bonusToApply, 'bonus', `bonus-${matchingTransaction.reference_id || uniqueCode}`, Date.now()], (e) => e ? rej(e) : res());
+                  [uid, bonusToApply, 'bonus', `bonus-${matchingTransaction.reference_id || uniqueCode}`, Date.now()], (e) => e ? rej(e) : res());
               }) : Promise.resolve();
 
               recordBonus.then(() => {
-                db.get('SELECT saldo FROM users WHERE user_id = ?', [deposit.user_id || deposit.userId], async (err, userRow) => {
+                db.get('SELECT saldo FROM users WHERE user_id = ?', [uid], async (err, userRow) => {
                   if (err) { db.run('ROLLBACK'); logger.error('Error fetching updated balance:', err.message); return reject(err); }
 
-                  const notificationSent = await sendPaymentSuccessNotification(deposit.user_id || deposit.userId, deposit, userRow.saldo, bonusToApply);
+                  const notificationSent = await sendPaymentSuccessNotification(uid, depositRow, userRow.saldo, bonusToApply);
 
-                  // attempt delete qr message if present
-                  if (deposit.qr_message_id || deposit.qrMessageId) {
-                    try { await bot.telegram.deleteMessage(deposit.user_id || deposit.userId, deposit.qr_message_id || deposit.qrMessageId); } catch (e) { /* ignore */ }
-                  }
+                  // delete QR message if exists
+                  try {
+                    if (depositRow.qr_message_id) await bot.telegram.deleteMessage(uid, depositRow.qr_message_id);
+                  } catch (e) { /* ignore */ }
 
                   if (notificationSent) {
                     // group notif
                     if (GROUP_ID) {
                       try {
-                        const userInfo = await bot.telegram.getChat(deposit.user_id || deposit.userId).catch(() => ({}));
-                        const username = userInfo.username ? `@${userInfo.username}` : (userInfo.first_name || (deposit.user_id || deposit.userId));
+                        const userInfo = await bot.telegram.getChat(uid).catch(() => ({}));
+                        const username = userInfo.username ? `@${userInfo.username}` : (userInfo.first_name || uid);
                         await bot.telegram.sendMessage(GROUP_ID,
                           `<b>✅ Top Up Berhasil</b>\nUser: ${username}\nNominal: Rp ${originalAmount}\n` +
                           (bonusToApply > 0 ? `Bonus: Rp ${bonusToApply}\n` : '') +
@@ -365,22 +373,18 @@ async function processMatchingPayment(deposit, matchingTransaction, uniqueCode) 
   });
 }
 
-// Minimal checkQRISStatus: example integration that looks for pending deposits and tries to match by amount
+// check pending deposits (placeholder: integrate real API)
 async function checkQRISStatus() {
   db.all('SELECT * FROM pending_deposits WHERE status = ?', ['pending'], (err, rows) => {
     if (err) return;
     rows.forEach(async (dep) => {
       try {
-        // Example: call API to check payments (replace with real API)
-        // const res = await axios.post(API_URL, buildPayload(...), { headers });
-        // If matching found call processMatchingPayment
-        // For now, try naive match: if pendingDeposits stored in memory and external simulated match exists, skip
         const age = Date.now() - dep.timestamp;
-        if (age > 1000 * 60 * 60 * 24) {
+        if (age > 1000 * 60 * 60 * 24) { // expire 24h
           db.run('UPDATE pending_deposits SET status = ? WHERE unique_code = ?', ['expired', dep.unique_code]);
+          delete global.pendingDeposits[dep.unique_code];
           return;
         }
-        // Placeholder: if a record in global.pendingDeposits was marked matched externally, process it.
         const pend = global.pendingDeposits[dep.unique_code];
         if (pend && pend.matchedTransaction) {
           await processMatchingPayment(dep, pend.matchedTransaction, dep.unique_code);
@@ -391,47 +395,32 @@ async function checkQRISStatus() {
 }
 setInterval(checkQRISStatus, 10000);
 
-// helper transaction recorder for account operations
-async function recordAccountTransaction(userId, type) {
-  return new Promise((resolve, reject) => {
-    const referenceId = `account-${type}-${userId}-${Date.now()}`;
-    db.run('INSERT INTO transactions (user_id, type, reference_id, timestamp) VALUES (?, ?, ?, ?)',
-      [userId, type, referenceId, Date.now()], (err) => err ? reject(err) : resolve());
-  });
-}
-
-// --- Callback query handler (menu actions) ---
+// callback queries (menu)
 bot.on('callback_query', async (ctx) => {
-  const data = ctx.callbackQuery.data;
+  const data = ctx.callbackQuery && ctx.callbackQuery.data;
   const userId = ctx.from.id;
   try {
+    if (!data) return await ctx.answerCbQuery();
+    await ctx.answerCbQuery();
     if (data === 'service_create') {
-      // show simple create options (example)
-      await ctx.answerCbQuery();
-      await ctx.reply('Pilih jenis layanan yang ingin dibuat:\n1. SSH\n2. Vmess\nKetik: create ssh atau create vmess');
+      await ctx.reply('Pilih jenis layanan yang ingin dibuat:\nKetik: create ssh atau create vmess');
       userState[userId] = { step: 'await_create_choice' };
     } else if (data === 'service_renew') {
-      await ctx.answerCbQuery();
       await ctx.reply('Ketik: renew <username>');
       userState[userId] = { step: 'await_renew' };
     } else if (data === 'service_del') {
-      await ctx.answerCbQuery();
       await ctx.reply('Ketik: del <username>');
       userState[userId] = { step: 'await_del' };
     } else if (data === 'service_lock') {
-      await ctx.answerCbQuery();
       await ctx.reply('Ketik: lock <username>');
       userState[userId] = { step: 'await_lock' };
     } else if (data === 'service_unlock') {
-      await ctx.answerCbQuery();
       await ctx.reply('Ketik: unlock <username>');
       userState[userId] = { step: 'await_unlock' };
     } else if (data === 'service_trial') {
-      await ctx.answerCbQuery();
       if (await checkTrialAccess(userId)) return ctx.reply('Anda sudah menggunakan trial hari ini.');
-      // For demo, create trial SSH (call module)
       try {
-        const acc = await trialssh(userId); // modules should return details
+        const acc = await trialssh(userId);
         await saveTrialAccess(userId);
         await ctx.reply(`Trial dibuat: ${acc.username}\nExpired: ${acc.expire}`);
         await recordAccountTransaction(userId, 'trial');
@@ -440,29 +429,23 @@ bot.on('callback_query', async (ctx) => {
         await ctx.reply('Gagal membuat trial.');
       }
     } else if (data === 'topup_saldo') {
-      await ctx.answerCbQuery();
       await ctx.reply('Masukkan nominal top-up (mis: 5000).');
       userState[userId] = { step: 'await_topup_amount' };
     } else if (data === 'cek_service') {
-      await ctx.answerCbQuery();
       await ctx.reply('Cek server: fitur cek server (placeholder).');
-    } else {
-      await ctx.answerCbQuery();
     }
   } catch (e) {
     logger.error('callback_query handler error: ' + (e.message || e));
   }
 });
 
-// --- Text handler for multi-step flows (create/renew/del/topup) ---
+// text handler for multi-step flows
 bot.on('text', async (ctx) => {
   const userId = ctx.from.id;
   const txt = (ctx.message.text || '').trim();
   const st = userState[userId];
   try {
-    // admin quick text commands for setting advanced config (optional)
     if (st && st.step === 'await_create_choice') {
-      // format: create ssh or create vmess
       if (txt.toLowerCase().startsWith('create ')) {
         const kind = txt.split(' ')[1];
         try {
@@ -482,12 +465,10 @@ bot.on('text', async (ctx) => {
     }
 
     if (st && st.step === 'await_renew') {
-      // format: renew <username>
       const parts = txt.split(' ');
       if (parts[0].toLowerCase() === 'renew' && parts[1]) {
         try {
-          // call renew module based on type detection (simplified)
-          const res = await renewssh(parts[1]).catch(()=>null);
+          await renewssh(parts[1]).catch(()=>null);
           ctx.reply('Perpanjangan diproses.');
           await recordAccountTransaction(userId, 'renew');
         } catch (e) { ctx.reply('Gagal perpanjang.'); }
@@ -530,15 +511,14 @@ bot.on('text', async (ctx) => {
     if (st && st.step === 'await_topup_amount') {
       const nominal = parseInt(txt.replace(/\D/g, ''));
       if (isNaN(nominal) || nominal <= 0) return ctx.reply('Nominal tidak valid. Masukkan angka (mis: 5000).');
-      // buat pending deposit
       const uniqueCode = `dep-${Date.now()}-${Math.floor(Math.random()*9000+1000)}`;
       const deposit = {
         unique_code: uniqueCode,
         user_id: userId,
-        amount: nominal, // may be used for matching
+        amount: nominal,
         original_amount: nominal,
         timestamp: Date.now(),
-        status: 'pending',
+        status: 'pending'
       };
       db.run('INSERT INTO pending_deposits (unique_code, user_id, amount, original_amount, timestamp, status) VALUES (?, ?, ?, ?, ?, ?)',
         [deposit.unique_code, deposit.user_id, deposit.amount, deposit.original_amount, deposit.timestamp, deposit.status], (err) => {
@@ -546,16 +526,14 @@ bot.on('text', async (ctx) => {
             logger.error('Failed insert pending_deposit: ' + (err.message || err));
             return ctx.reply('Gagal membuat instruksi pembayaran.');
           }
-          // store in memory pending (for example external checker could set matchedTransaction)
           global.pendingDeposits[uniqueCode] = { deposit, matchedTransaction: null };
-          // send placeholder QR/instruction; replace with real QR generation if available
-          ctx.reply(`Instruksi pembayaran dibuat.\nKode: ${uniqueCode}\nNominal: Rp ${nominal}\nSilakan lakukan pembayaran sesuai instruksi (placeholder). Bot akan otomatis memproses setelah pembayaran terdeteksi.`);
+          ctx.reply(`Instruksi pembayaran dibuat.\nKode: ${uniqueCode}\nNominal: Rp ${nominal}\nSilakan lakukan pembayaran sesuai instruksi. Bot akan otomatis memproses setelah pembayaran terdeteksi.`);
         });
       delete userState[userId];
       return;
     }
 
-    // fallback: commands in text e.g., manual create/del/renew typed without menu
+    // manual typed commands
     const parts = txt.split(' ');
     const cmd = parts[0].toLowerCase();
     if (cmd === 'create' && parts[1]) {
@@ -570,18 +548,19 @@ bot.on('text', async (ctx) => {
       } catch (e) { ctx.reply('Gagal membuat akun.'); }
       return;
     }
-    // no matching flow: ignore
+
+    // other free text are ignored (to avoid breaking flows)
   } catch (e) {
     logger.error('text handler error: ' + (e.message || e));
   }
 });
 
-// start server & bot
+// start server and bot
 app.listen(port, () => {
   bot.launch().then(() => logger.info('Bot telah dimulai')).catch(e => logger.error('Error start bot:', e.message || e));
   logger.info(`Server berjalan di port ${port}`);
 });
 
-// graceful stop
+// graceful shutdown
 process.once('SIGINT', () => bot.stop('SIGINT'));
 process.once('SIGTERM', () => bot.stop('SIGTERM'));
