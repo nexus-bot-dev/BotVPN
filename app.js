@@ -1,4 +1,4 @@
- // ...existing code...
+ // Full app.js — gabungan fitur lama + bonus top-up/admin
 const os = require('os');
 const sqlite3 = require('sqlite3').verbose();
 const express = require('express');
@@ -190,8 +190,18 @@ async function sendMainMenu(ctx) {
     const row = await new Promise((res, rej) => db.get('SELECT saldo FROM users WHERE user_id = ?', [userId], (e, r) => e ? rej(e) : res(r)));
     saldo = row ? row.saldo : 0;
   } catch (e) { saldo = 0; }
-  const messageText = `Hi ${userName}\nID: ${userId}\nSaldo: Rp ${saldo}\n\nKetik /helpadmin (admin) atau gunakan tombol.`;
-  try { await ctx.reply(messageText); } catch (e) { logger.error('Error sendMainMenu:', e.message); }
+  const messageText = `Hi ${userName}\nID: ${userId}\nSaldo: Rp ${saldo}\n\nPilih tindakan:`;
+  const keyboard = {
+    reply_markup: {
+      inline_keyboard: [
+        [{ text: '➕ Buat Akun', callback_data: 'service_create' }, { text: '♻️ Perpanjang', callback_data: 'service_renew' }],
+        [{ text: '❌ Hapus Akun', callback_data: 'service_del' }, { text: '🗝️ Kunci Akun', callback_data: 'service_lock' }],
+        [{ text: '🔐 Buka Kunci', callback_data: 'service_unlock' }, { text: '⌛ Trial', callback_data: 'service_trial' }],
+        [{ text: '💰 TopUp Saldo', callback_data: 'topup_saldo' }, { text: '📶 Cek Server', callback_data: 'cek_service' }]
+      ]
+    }
+  };
+  try { await ctx.reply(messageText, keyboard); } catch (e) { logger.error('Error sendMainMenu:', e.message); }
 }
 
 // admin command
@@ -282,12 +292,9 @@ async function sendPaymentSuccessNotification(userId, deposit, currentBalance, b
 }
 
 async function processMatchingPayment(deposit, matchingTransaction, uniqueCode) {
-  // deposit: object { userId, original_amount, qrMessageId, ... }
-  // matchingTransaction: object { reference_id, kredit|amount, ... }
   const amountKey = matchingTransaction.kredit || matchingTransaction.amount || 0;
   const transactionKey = `${matchingTransaction.reference_id || uniqueCode}_${amountKey}`;
 
-  // prevent double processing
   if (global.processedTransactions.has(transactionKey)) {
     logger.info('Transaction already processed: ' + transactionKey);
     return false;
@@ -297,46 +304,42 @@ async function processMatchingPayment(deposit, matchingTransaction, uniqueCode) 
     db.serialize(() => {
       db.run('BEGIN TRANSACTION');
       db.get('SELECT id FROM transactions WHERE reference_id = ? AND amount = ?', [matchingTransaction.reference_id || uniqueCode, amountKey], (err, row) => {
-        if (err) {
-          db.run('ROLLBACK'); logger.error('Error checking transaction:', err.message); return reject(err);
-        }
-        if (row) {
-          db.run('ROLLBACK'); logger.info('Transaction exists, skip'); return resolve(false);
-        }
+        if (err) { db.run('ROLLBACK'); logger.error('Error checking transaction:', err.message); return reject(err); }
+        if (row) { db.run('ROLLBACK'); logger.info('Transaction exists, skip'); return resolve(false); }
 
         const originalAmount = Number(deposit.original_amount || deposit.originalAmount || 0);
         const bonusToApply = (adminConfig.bonusEnabled && originalAmount >= (adminConfig.bonusThreshold || 0)) ? Number(adminConfig.bonusAmount || 0) : 0;
         const totalCredit = originalAmount + bonusToApply;
 
-        db.run('UPDATE users SET saldo = saldo + ? WHERE user_id = ?', [totalCredit, deposit.userId], function (err) {
+        db.run('UPDATE users SET saldo = saldo + ? WHERE user_id = ?', [totalCredit, deposit.user_id || deposit.userId], function (err) {
           if (err) { db.run('ROLLBACK'); logger.error('Error updating balance:', err.message); return reject(err); }
 
           db.run('INSERT INTO transactions (user_id, amount, type, reference_id, timestamp) VALUES (?, ?, ?, ?, ?)',
-            [deposit.userId, originalAmount, 'deposit', matchingTransaction.reference_id || uniqueCode, Date.now()], (err) => {
+            [deposit.user_id || deposit.userId, originalAmount, 'deposit', matchingTransaction.reference_id || uniqueCode, Date.now()], (err) => {
               if (err) { db.run('ROLLBACK'); logger.error('Error recording deposit txn:', err.message); return reject(err); }
 
               const recordBonus = (bonusToApply > 0) ? new Promise((res, rej) => {
                 db.run('INSERT INTO transactions (user_id, amount, type, reference_id, timestamp) VALUES (?, ?, ?, ?, ?)',
-                  [deposit.userId, bonusToApply, 'bonus', `bonus-${matchingTransaction.reference_id || uniqueCode}`, Date.now()], (e) => e ? rej(e) : res());
+                  [deposit.user_id || deposit.userId, bonusToApply, 'bonus', `bonus-${matchingTransaction.reference_id || uniqueCode}`, Date.now()], (e) => e ? rej(e) : res());
               }) : Promise.resolve();
 
               recordBonus.then(() => {
-                db.get('SELECT saldo FROM users WHERE user_id = ?', [deposit.userId], async (err, userRow) => {
+                db.get('SELECT saldo FROM users WHERE user_id = ?', [deposit.user_id || deposit.userId], async (err, userRow) => {
                   if (err) { db.run('ROLLBACK'); logger.error('Error fetching updated balance:', err.message); return reject(err); }
 
-                  const notificationSent = await sendPaymentSuccessNotification(deposit.userId, deposit, userRow.saldo, bonusToApply);
+                  const notificationSent = await sendPaymentSuccessNotification(deposit.user_id || deposit.userId, deposit, userRow.saldo, bonusToApply);
 
                   // attempt delete qr message if present
                   if (deposit.qr_message_id || deposit.qrMessageId) {
-                    try { await bot.telegram.deleteMessage(deposit.userId, deposit.qr_message_id || deposit.qrMessageId); } catch (e) { /* ignore */ }
+                    try { await bot.telegram.deleteMessage(deposit.user_id || deposit.userId, deposit.qr_message_id || deposit.qrMessageId); } catch (e) { /* ignore */ }
                   }
 
                   if (notificationSent) {
                     // group notif
                     if (GROUP_ID) {
                       try {
-                        const userInfo = await bot.telegram.getChat(deposit.userId).catch(() => ({}));
-                        const username = userInfo.username ? `@${userInfo.username}` : (userInfo.first_name || deposit.userId);
+                        const userInfo = await bot.telegram.getChat(deposit.user_id || deposit.userId).catch(() => ({}));
+                        const username = userInfo.username ? `@${userInfo.username}` : (userInfo.first_name || (deposit.user_id || deposit.userId));
                         await bot.telegram.sendMessage(GROUP_ID,
                           `<b>✅ Top Up Berhasil</b>\nUser: ${username}\nNominal: Rp ${originalAmount}\n` +
                           (bonusToApply > 0 ? `Bonus: Rp ${bonusToApply}\n` : '') +
@@ -344,7 +347,6 @@ async function processMatchingPayment(deposit, matchingTransaction, uniqueCode) 
                       } catch (e) { logger.error('Failed send group notif:', e.message); }
                     }
 
-                    // cleanup pending
                     db.run('COMMIT');
                     global.processedTransactions.add(transactionKey);
                     delete global.pendingDeposits[uniqueCode];
@@ -363,18 +365,27 @@ async function processMatchingPayment(deposit, matchingTransaction, uniqueCode) 
   });
 }
 
-// Minimal checkQRISStatus: scan pending_deposits and simulate matching flow (should be adapted to real API)
+// Minimal checkQRISStatus: example integration that looks for pending deposits and tries to match by amount
 async function checkQRISStatus() {
-  // Example: load pending_deposits from db and attempt to match remote API
   db.all('SELECT * FROM pending_deposits WHERE status = ?', ['pending'], (err, rows) => {
     if (err) return;
     rows.forEach(async (dep) => {
-      // use API to check payment by reference or amount; here we skip actual API integration
-      // Placeholder: if pending older than X, cleanup; actual implementation should check API
-      const age = Date.now() - dep.timestamp;
-      if (age > 1000 * 60 * 60 * 24) { // 24h expire
-        db.run('UPDATE pending_deposits SET status = ? WHERE unique_code = ?', ['expired', dep.unique_code]);
-      }
+      try {
+        // Example: call API to check payments (replace with real API)
+        // const res = await axios.post(API_URL, buildPayload(...), { headers });
+        // If matching found call processMatchingPayment
+        // For now, try naive match: if pendingDeposits stored in memory and external simulated match exists, skip
+        const age = Date.now() - dep.timestamp;
+        if (age > 1000 * 60 * 60 * 24) {
+          db.run('UPDATE pending_deposits SET status = ? WHERE unique_code = ?', ['expired', dep.unique_code]);
+          return;
+        }
+        // Placeholder: if a record in global.pendingDeposits was marked matched externally, process it.
+        const pend = global.pendingDeposits[dep.unique_code];
+        if (pend && pend.matchedTransaction) {
+          await processMatchingPayment(dep, pend.matchedTransaction, dep.unique_code);
+        }
+      } catch (e) { logger.error('checkQRISStatus error: ' + (e.message || e)); }
     });
   });
 }
@@ -389,6 +400,182 @@ async function recordAccountTransaction(userId, type) {
   });
 }
 
+// --- Callback query handler (menu actions) ---
+bot.on('callback_query', async (ctx) => {
+  const data = ctx.callbackQuery.data;
+  const userId = ctx.from.id;
+  try {
+    if (data === 'service_create') {
+      // show simple create options (example)
+      await ctx.answerCbQuery();
+      await ctx.reply('Pilih jenis layanan yang ingin dibuat:\n1. SSH\n2. Vmess\nKetik: create ssh atau create vmess');
+      userState[userId] = { step: 'await_create_choice' };
+    } else if (data === 'service_renew') {
+      await ctx.answerCbQuery();
+      await ctx.reply('Ketik: renew <username>');
+      userState[userId] = { step: 'await_renew' };
+    } else if (data === 'service_del') {
+      await ctx.answerCbQuery();
+      await ctx.reply('Ketik: del <username>');
+      userState[userId] = { step: 'await_del' };
+    } else if (data === 'service_lock') {
+      await ctx.answerCbQuery();
+      await ctx.reply('Ketik: lock <username>');
+      userState[userId] = { step: 'await_lock' };
+    } else if (data === 'service_unlock') {
+      await ctx.answerCbQuery();
+      await ctx.reply('Ketik: unlock <username>');
+      userState[userId] = { step: 'await_unlock' };
+    } else if (data === 'service_trial') {
+      await ctx.answerCbQuery();
+      if (await checkTrialAccess(userId)) return ctx.reply('Anda sudah menggunakan trial hari ini.');
+      // For demo, create trial SSH (call module)
+      try {
+        const acc = await trialssh(userId); // modules should return details
+        await saveTrialAccess(userId);
+        await ctx.reply(`Trial dibuat: ${acc.username}\nExpired: ${acc.expire}`);
+        await recordAccountTransaction(userId, 'trial');
+      } catch (e) {
+        logger.error('trial create err: ' + (e.message || e));
+        await ctx.reply('Gagal membuat trial.');
+      }
+    } else if (data === 'topup_saldo') {
+      await ctx.answerCbQuery();
+      await ctx.reply('Masukkan nominal top-up (mis: 5000).');
+      userState[userId] = { step: 'await_topup_amount' };
+    } else if (data === 'cek_service') {
+      await ctx.answerCbQuery();
+      await ctx.reply('Cek server: fitur cek server (placeholder).');
+    } else {
+      await ctx.answerCbQuery();
+    }
+  } catch (e) {
+    logger.error('callback_query handler error: ' + (e.message || e));
+  }
+});
+
+// --- Text handler for multi-step flows (create/renew/del/topup) ---
+bot.on('text', async (ctx) => {
+  const userId = ctx.from.id;
+  const txt = (ctx.message.text || '').trim();
+  const st = userState[userId];
+  try {
+    // admin quick text commands for setting advanced config (optional)
+    if (st && st.step === 'await_create_choice') {
+      // format: create ssh or create vmess
+      if (txt.toLowerCase().startsWith('create ')) {
+        const kind = txt.split(' ')[1];
+        try {
+          let acc;
+          if (kind === 'ssh') acc = await createssh(userId);
+          else if (kind === 'vmess') acc = await createvmess(userId);
+          else return ctx.reply('Jenis tidak dikenali.');
+          await ctx.reply(`Akun dibuat:\n${JSON.stringify(acc)}`);
+          await recordAccountTransaction(userId, 'create');
+        } catch (e) {
+          logger.error('create account error: ' + (e.message || e));
+          ctx.reply('Gagal membuat akun.');
+        }
+      } else ctx.reply('Gunakan format: create <jenis>');
+      delete userState[userId];
+      return;
+    }
+
+    if (st && st.step === 'await_renew') {
+      // format: renew <username>
+      const parts = txt.split(' ');
+      if (parts[0].toLowerCase() === 'renew' && parts[1]) {
+        try {
+          // call renew module based on type detection (simplified)
+          const res = await renewssh(parts[1]).catch(()=>null);
+          ctx.reply('Perpanjangan diproses.');
+          await recordAccountTransaction(userId, 'renew');
+        } catch (e) { ctx.reply('Gagal perpanjang.'); }
+      } else ctx.reply('Gunakan renew <username>');
+      delete userState[userId];
+      return;
+    }
+
+    if (st && st.step === 'await_del') {
+      const parts = txt.split(' ');
+      if (parts[0].toLowerCase() === 'del' && parts[1]) {
+        try {
+          await delssh(parts[1]).catch(()=>null);
+          ctx.reply('Akun dihapus.');
+          await recordAccountTransaction(userId, 'delete');
+        } catch (e) { ctx.reply('Gagal hapus.'); }
+      } else ctx.reply('Gunakan del <username>');
+      delete userState[userId];
+      return;
+    }
+
+    if (st && st.step === 'await_lock') {
+      const parts = txt.split(' ');
+      if (parts[0].toLowerCase() === 'lock' && parts[1]) {
+        try { await lockssh(parts[1]).catch(()=>null); ctx.reply('Akun dikunci.'); } catch { ctx.reply('Gagal lock.'); }
+      } else ctx.reply('Gunakan lock <username>');
+      delete userState[userId];
+      return;
+    }
+
+    if (st && st.step === 'await_unlock') {
+      const parts = txt.split(' ');
+      if (parts[0].toLowerCase() === 'unlock' && parts[1]) {
+        try { await unlockssh(parts[1]).catch(()=>null); ctx.reply('Akun dibuka.'); } catch { ctx.reply('Gagal unlock.'); }
+      } else ctx.reply('Gunakan unlock <username>');
+      delete userState[userId];
+      return;
+    }
+
+    if (st && st.step === 'await_topup_amount') {
+      const nominal = parseInt(txt.replace(/\D/g, ''));
+      if (isNaN(nominal) || nominal <= 0) return ctx.reply('Nominal tidak valid. Masukkan angka (mis: 5000).');
+      // buat pending deposit
+      const uniqueCode = `dep-${Date.now()}-${Math.floor(Math.random()*9000+1000)}`;
+      const deposit = {
+        unique_code: uniqueCode,
+        user_id: userId,
+        amount: nominal, // may be used for matching
+        original_amount: nominal,
+        timestamp: Date.now(),
+        status: 'pending',
+      };
+      db.run('INSERT INTO pending_deposits (unique_code, user_id, amount, original_amount, timestamp, status) VALUES (?, ?, ?, ?, ?, ?)',
+        [deposit.unique_code, deposit.user_id, deposit.amount, deposit.original_amount, deposit.timestamp, deposit.status], (err) => {
+          if (err) {
+            logger.error('Failed insert pending_deposit: ' + (err.message || err));
+            return ctx.reply('Gagal membuat instruksi pembayaran.');
+          }
+          // store in memory pending (for example external checker could set matchedTransaction)
+          global.pendingDeposits[uniqueCode] = { deposit, matchedTransaction: null };
+          // send placeholder QR/instruction; replace with real QR generation if available
+          ctx.reply(`Instruksi pembayaran dibuat.\nKode: ${uniqueCode}\nNominal: Rp ${nominal}\nSilakan lakukan pembayaran sesuai instruksi (placeholder). Bot akan otomatis memproses setelah pembayaran terdeteksi.`);
+        });
+      delete userState[userId];
+      return;
+    }
+
+    // fallback: commands in text e.g., manual create/del/renew typed without menu
+    const parts = txt.split(' ');
+    const cmd = parts[0].toLowerCase();
+    if (cmd === 'create' && parts[1]) {
+      const kind = parts[1];
+      try {
+        let acc;
+        if (kind === 'ssh') acc = await createssh(userId);
+        else if (kind === 'vmess') acc = await createvmess(userId);
+        else return ctx.reply('Jenis tidak dikenali.');
+        await ctx.reply(`Akun dibuat:\n${JSON.stringify(acc)}`);
+        await recordAccountTransaction(userId, 'create');
+      } catch (e) { ctx.reply('Gagal membuat akun.'); }
+      return;
+    }
+    // no matching flow: ignore
+  } catch (e) {
+    logger.error('text handler error: ' + (e.message || e));
+  }
+});
+
 // start server & bot
 app.listen(port, () => {
   bot.launch().then(() => logger.info('Bot telah dimulai')).catch(e => logger.error('Error start bot:', e.message || e));
@@ -398,5 +585,3 @@ app.listen(port, () => {
 // graceful stop
 process.once('SIGINT', () => bot.stop('SIGINT'));
 process.once('SIGTERM', () => bot.stop('SIGTERM'));
-
-// ...existing code...
