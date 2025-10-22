@@ -461,6 +461,7 @@ bot.command('setbonus', async (ctx) => {
 });
 // ------------------------------------------
 
+
 bot.command('hapuslog', async (ctx) => {
   if (!adminIds.includes(ctx.from.id)) return ctx.reply('Tidak ada izin!');
   try {
@@ -2023,7 +2024,7 @@ bot.action('addserver', async (ctx) => {
     userState[ctx.chat.id] = { step: 'addserver' };
   } catch (error) {
     logger.error('❌ Kesalahan saat memulai proses tambah server:', error);
-    await ctx.reply('❌ *GAGAL! Terjadi kesalahan saat memproses permintaan Anda. Silakan coba lagi nanti.*', { parse_mode: 'Markdown' });
+    await ctx.reply('❌ *GAGAL!* Terjadi kesalahan saat memproses permintaan Anda. Silakan coba lagi nanti.', { parse_mode: 'Markdown' });
   }
 });
 bot.action('detailserver', async (ctx) => {
@@ -2181,7 +2182,7 @@ bot.action('deleteserver', async (ctx) => {
     });
   } catch (error) {
     logger.error('❌ Kesalahan saat memulai proses hapus server:', error);
-    await ctx.reply('❌ *GAGAL! Terjadi kesalahan saat memproses permintaan Anda. Silakan coba lagi nanti.*', { parse_mode: 'Markdown' });
+    await ctx.reply('❌ *GAGAL!* Terjadi kesalahan saat memproses permintaan Anda. Silakan coba lagi nanti.', { parse_mode: 'Markdown' });
   }
 });
 
@@ -2852,7 +2853,7 @@ bot.action(/confirm_delete_server_(\d+)/, async (ctx) => {
     });
   } catch (error) {
     logger.error('Kesalahan saat menghapus server:', error);
-    await ctx.reply('❌ *GAGAL! Terjadi kesalahan saat memproses permintaan Anda. Silakan coba lagi nanti.*', { parse_mode: 'Markdown' });
+    await ctx.reply('❌ *GAGAL!* Terjadi kesalahan saat memproses permintaan Anda. Silakan coba lagi nanti.', { parse_mode: 'Markdown' });
   }
 });
 bot.action(/server_detail_(\d+)/, async (ctx) => {
@@ -3116,7 +3117,7 @@ async function handleEditField(ctx, userStateData, data, field, fieldName, query
     });
   }
 }
-async function updateUserSaldo(userId, saldo) {
+async function updateUserBalance(userId, saldo) {
   return new Promise((resolve, reject) => {
     db.run('UPDATE users SET saldo = saldo + ? WHERE user_id = ?', [saldo, userId], function (err) {
       if (err) {
@@ -3402,20 +3403,28 @@ function keyboard_full() {
 }
 
 global.processedTransactions = new Set();
-// --- Update fungsi ini untuk menerima bonusAmount dan finalCredit ---
+// --- FUNGSI NOTIFIKASI BERHASIL (DIPERBAIKI) ---
 async function sendPaymentSuccessNotification(userId, deposit, currentBalance, bonusAmount, finalCredit) {
   try {
     const adminFee = deposit.amount - deposit.originalAmount;
-    await bot.telegram.sendMessage(userId,
-      `✅ *Pembayaran Berhasil!*\n\n` +
-      `💰 Jumlah Top Up: Rp ${deposit.originalAmount}\n` +
-      `🎁 Bonus Top Up: Rp ${bonusAmount}\n` +
-      `💵 Total Saldo Ditambahkan: Rp ${finalCredit}\n` +
-      `---------------------------------\n` +
-      `💰 Total Pembayaran: Rp ${deposit.amount}\n` +
-      `💳 Saldo Sekarang: Rp ${currentBalance}`,
-      { parse_mode: 'Markdown' }
-    );
+    
+    // Format pesan lebih detail dan menarik
+    const message = 
+      `🎉 **TOP-UP BERHASIL! Saldo Anda Bertambah Otomatis!** 🎉\n\n` +
+      `------------------------------------------\n` +
+      `💰 *Deposit Anda:*\n` +
+      ` • Nominal Transfer: \`Rp ${deposit.amount}\`\n` +
+      ` • Nominal Saldo Asli: \`Rp ${deposit.originalAmount}\`\n` +
+      ` • Biaya Admin: \`Rp ${adminFee}\`\n` +
+      `------------------------------------------\n` +
+      `🎁 *Bonus:* \n` +
+      ` • Bonus Saldo: \`Rp ${bonusAmount}\`\n` +
+      ` • **Total Saldo Ditambahkan:** \`Rp ${finalCredit}\`\n` +
+      `------------------------------------------\n` +
+      `💳 **SALDO AKUN ANDA SEKARANG: \`Rp ${currentBalance}\`**\n\n` +
+      `Terima kasih telah Top-Up di ${NAMA_STORE}. Selamat berbelanja!`;
+
+    await bot.telegram.sendMessage(userId, message, { parse_mode: 'Markdown' });
     return true;
   } catch (error) {
     logger.error('Error sending payment notification:', error);
@@ -3517,7 +3526,7 @@ async function processMatchingPayment(deposit, matchingTransaction, uniqueCode) 
         await bot.telegram.sendMessage(
           GROUP_ID,
           `<blockquote>
-✅ <b>Top Up Berhasil</b>
+✅ <b>Top Up Berhasil (Otomatis)</b>
 👤 User: ${userDisplay}
 💰 Nominal Asli: <b>Rp ${deposit.originalAmount}</b>
 🎁 Bonus: <b>Rp ${bonusAmount}</b>
@@ -3578,7 +3587,7 @@ async function recordAccountTransaction(userId, type) {
   });
 }
 
-// --- Fungsi Auto Backup Database (BARU) ---
+// --- Fungsi Auto Backup Database ---
 async function autoBackupDb() {
   const dbPath = path.join(__dirname, 'sellvpn.db');
   const adminId = adminIds[0] || adminIds; // Ambil ID admin pertama
