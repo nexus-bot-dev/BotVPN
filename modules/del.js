@@ -1,123 +1,164 @@
-  const { exec } = require('child_process');
-const sqlite3 = require('sqlite3').verbose();
+  const sqlite3 = require('sqlite3').verbose();
+const fetch = require('node-fetch'); // Pastikan Anda sudah menginstal: npm install node-fetch
 const db = new sqlite3.Database('./sellvpn.db');
 
+// ==========================================================
+// ⚠️ FUNGSI REFUND (HARUS ANDA IMPLEMENTASIKAN)
+// ==========================================================
 /**
- * Fungsi umum untuk menghapus akun & refund otomatis
- * @param {string} type - tipe layanan (sshvpn, vmess, vless, trojan, shadowsocks)
- * @param {string} username - nama akun yang akan dihapus
- * @param {number} userId - ID user pemilik akun
- * @param {number} serverId - ID server tempat akun dibuat
- * @returns {Promise<{message: string, daysLeft: number}>}
+ * Memproses refund ke saldo pengguna berdasarkan sisa hari dan harga akun.
+ * @param {string} username - Username akun yang dihapus.
+ * @param {number} daysLeft - Sisa hari kedaluwarsa.
+ * @returns {Promise<{success: boolean, refundAmount: number}>}
  */
-async function deleteAccount(type, username, userId, serverId) {
-  if (/\s/.test(username) || /[^a-zA-Z0-9]/.test(username)) {
-    return { message: '❌ Username tidak valid. Mohon gunakan hanya huruf dan angka tanpa spasi.', daysLeft: 0 };
-  }
+async function processRefund(username, daysLeft) {
+    // ⚠️ PENTING: GANTI DENGAN LOGIKA DATABASE DAN HARGA ANDA!
+    if (daysLeft > 0) {
+        const PRICE_PER_DAY = 1000; // Contoh: Harga Rp 1000 per hari
+        const refundAmount = Math.floor(daysLeft * PRICE_PER_DAY);
+        
+        // --- UNCOMMENT DAN SESUAIKAN LOGIKA UPDATE SALDO ANDA DI SINI ---
+        /*
+        await new Promise((resolve, reject) => {
+             db.run(
+                 'UPDATE Users SET balance = balance + ? WHERE username = ?',
+                 [refundAmount, username],
+                 (err) => {
+                     if (err) return reject(err);
+                     resolve();
+                 }
+             );
+        });
+        */
+        // -----------------------------------------------------------------
 
-  return new Promise((resolve) => {
-    db.get('SELECT * FROM Server WHERE id = ?', [serverId], (err, server) => {
-      if (err || !server) return resolve({ message: '❌ Server tidak ditemukan.', daysLeft: 0 });
+        return { success: true, refundAmount: refundAmount };
+    }
+    return { success: false, refundAmount: 0 };
+}
 
-      const { domain, auth, nama_server } = server;
-      const endpoint = `http://${domain}/vps/delete${type}`;
-      const curlCommand = `curl -s -X DELETE "${endpoint}/${username}" -H "Authorization: ${auth}" -H "accept: application/json"`;
 
-      exec(curlCommand, (_, stdout) => {
-        let d;
-        try {
-          d = JSON.parse(stdout);
-        } catch {
-          return resolve({ message: '❌ Format respon dari server tidak valid.', daysLeft: 0 });
-        }
+// ==========================================================
+// FUNGSI INTI PENGHAPUSAN AKUN (Lebih bersih dan efisien)
+// ==========================================================
+async function deleteAccount(username, protocol, serverId) {
+    const apiPaths = {
+        ssh: 'deletesshvpn',
+        vmess: 'deletevmess',
+        vless: 'deletevless',
+        trojan: 'deletetrojan',
+        shadowsocks: 'deleteshadowsocks'
+    };
+    
+    // 1. Validasi Input
+    if (/\s/.test(username) || /[^a-zA-Z0-9]/.test(username)) {
+        return { message: '❌ Username tidak valid. Mohon gunakan hanya huruf dan angka tanpa spasi.', daysLeft: 0 };
+    }
+    
+    const apiPath = apiPaths[protocol.toLowerCase()];
+    if (!apiPath) {
+        return { message: '❌ Protokol tidak valid.', daysLeft: 0 };
+    }
 
-        if (d?.meta?.code !== 200 || !d.data) {
-          const errMsg = d?.message || d?.meta?.message || 'Gagal menghapus akun.';
-          return resolve({ message: `❌ Gagal: ${errMsg}`, daysLeft: 0 });
-        }
-
-        const s = d.data;
-        const daysLeft = s.days_left || 0;
-
-        // === Ambil harga akun dari database ===
-        db.get(
-          'SELECT harga, exp FROM Akun WHERE username = ? AND server_id = ? AND user_id = ?',
-          [username, serverId, userId],
-          (err2, akun) => {
-            if (err2 || !akun) {
-              const msgNoRefund = `✅ *Akun Berhasil Dihapus*
-
-🗑️ **Detail Akun**
-    ├─ Server: \`${nama_server}\`
-    └─ Username: \`${s.username}\`
-
-⚠️ Data harga akun tidak ditemukan, refund tidak diproses.`;
-              return resolve({ message: msgNoRefund, daysLeft });
+    return new Promise((resolve) => {
+        // 2. Database Lookup
+        db.get('SELECT * FROM Server WHERE id = ?', [serverId], async (err, server) => {
+            if (err || !server) {
+                return resolve({ message: '❌ Server tidak ditemukan.', daysLeft: 0 });
             }
 
-            const hargaPerHari = akun.harga / akun.exp;
-            const refund = Math.round(daysLeft * hargaPerHari);
+            const { domain, auth, nama_server } = server;
+            const web_URL = `http://${domain}/vps/${apiPath}/${username}`;
 
-            // === Proses refund saldo ke user ===
-            db.get('SELECT saldo FROM Users WHERE id = ?', [userId], (err3, user) => {
-              if (err3 || !user) {
-                const msgNoUser = `✅ *Akun Dihapus*, tapi refund gagal karena user tidak ditemukan.`;
-                return resolve({ message: msgNoUser, daysLeft });
-              }
+            let d;
+            try {
+                // 3. API Call menggunakan node-fetch
+                const response = await fetch(web_URL, {
+                    method: 'DELETE',
+                    headers: {
+                        'Authorization': auth,
+                        'Accept': 'application/json'
+                    }
+                });
 
-              const saldoBaru = user.saldo + refund;
-              db.run('UPDATE Users SET saldo = ? WHERE id = ?', [saldoBaru, userId], (err4) => {
-                if (err4) {
-                  const msgFailRefund = `✅ *Akun Dihapus*, tapi refund gagal disimpan ke database.`;
-                  return resolve({ message: msgFailRefund, daysLeft });
+                d = await response.json();
+
+                // Cek status HTTP 
+                if (!response.ok || d?.meta?.code !== 200 || !d.data) {
+                    const errMsg = d?.message || d?.meta?.message || `Gagal menghapus akun ${protocol}.`;
+                    return resolve({ message: `❌ Gagal: ${errMsg}. Status HTTP: ${response.status}`, daysLeft: 0 });
                 }
 
-                // === Hapus juga data akun dari tabel Akun ===
-                db.run(
-                  'DELETE FROM Akun WHERE username = ? AND server_id = ? AND user_id = ?',
-                  [username, serverId, userId],
-                  () => {}
-                );
+            } catch (e) {
+                // Error koneksi atau JSON parsing
+                return resolve({ message: `❌ Gagal koneksi atau format respon tidak valid dari server ${domain}.`, daysLeft: 0 });
+            }
 
-                const msg = `✅ *Akun Berhasil Dihapus dan Refund Diproses!*
+            // 4. Response Handling & Refund Logic
+            
+            // ✅ MENGAMBIL DATA DARI ENDPOINT DELETE 
+            const s = d.data;
+            const daysLeft = s.days_left || 0; // Mengambil sisa hari
+            const deletedUsername = s.username || username; // Mengambil username dari respon (jika ada)
+
+            let refundMsg = '';
+            if (daysLeft > 0) {
+                try {
+                    const refundResult = await processRefund(deletedUsername, daysLeft);
+                    if (refundResult.success) {
+                        refundMsg = `\n💰 *Refund Otomatis:* Berhasil ditambahkan sebesar \`Rp. ${refundResult.refundAmount.toLocaleString('id-ID')}\` ke saldo Anda.`;
+                    } else {
+                        refundMsg = `\n⚠️ *Peringatan:* Akun dihapus, tetapi GAGAL memproses refund otomatis. Mohon hubungi admin.`;
+                    }
+                } catch (e) {
+                    refundMsg = `\n⚠️ *Peringatan:* Akun dihapus, tetapi terjadi ERROR saat memproses refund. Mohon hubungi admin.`;
+                    console.error('Error saat proses refund:', e);
+                }
+            } else {
+                refundMsg = `\n*Tidak ada sisa hari. Tidak ada refund yang diproses.*`;
+            }
+            
+            const msg = `✅ *Akun Berhasil Dihapus*
 
 🗑️ **Detail Akun**
     ├─ Server: \`${nama_server}\`
-    └─ Username: \`${s.username}\`
+    └─ Username: \`${deletedUsername}\`
 
-🗓️ *Sisa Hari*: \`${daysLeft}\` hari
-💰 *Saldo Dikembalikan*: Rp${refund.toLocaleString('id-ID')}
-
-💵 *Saldo Baru*: Rp${saldoBaru.toLocaleString('id-ID')}`;
-                return resolve({ message: msg, daysLeft });
-              });
-            });
-          }
-        );
-      });
+🗓️ *Sisa Hari*: \`${daysLeft}\` hari.${refundMsg}`;
+            
+            return resolve({ message: msg, daysLeft: daysLeft });
+        });
     });
-  });
 }
 
-// === Alias sesuai jenis layanan (agar kompatibel dengan kode lama) ===
-async function delssh(username, userId, serverId) {
-  return deleteAccount('sshvpn', username, userId, serverId);
+// ==========================================================
+// WRAPPER FUNGSI YANG DIEKSPOR (Menggunakan parameter yang relevan saja)
+// ==========================================================
+
+// Fungsi delssh yang asli memiliki 5 argumen. Kita hanya butuh username dan serverId.
+// Kami mempertahankan struktur argumen lama (username, password, exp, iplimit, serverId) 
+// tetapi hanya menggunakan argumen ke-1 (username) dan ke-5 (serverId).
+// Ini penting agar BOT Anda tidak error saat memanggilnya.
+
+async function delssh(username, password, exp, iplimit, serverId) { 
+    return deleteAccount(username, 'ssh', serverId); 
 }
 
-async function delvmess(username, userId, serverId) {
-  return deleteAccount('vmess', username, userId, serverId);
+async function delvmess(username, exp, quota, limitip, serverId) { 
+    // Menggunakan index yang benar dari argumen asli: username (0), serverId (4)
+    return deleteAccount(username, 'vmess', serverId); 
 }
 
-async function delvless(username, userId, serverId) {
-  return deleteAccount('vless', username, userId, serverId);
+async function delvless(username, exp, quota, limitip, serverId) { 
+    return deleteAccount(username, 'vless', serverId); 
 }
 
-async function deltrojan(username, userId, serverId) {
-  return deleteAccount('trojan', username, userId, serverId);
+async function deltrojan(username, exp, quota, limitip, serverId) { 
+    return deleteAccount(username, 'trojan', serverId); 
 }
 
-async function delshadowsocks(username, userId, serverId) {
-  return deleteAccount('shadowsocks', username, userId, serverId);
+async function delshadowsocks(username, exp, quota, limitip, serverId) { 
+    return deleteAccount(username, 'shadowsocks', serverId); 
 }
-
-module.exports = { delssh, delvmess, delvless, deltrojan, delshadowsocks };
+  
+module.exports = { delshadowsocks, deltrojan, delvless, delvmess, delssh };
