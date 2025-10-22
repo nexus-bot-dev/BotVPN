@@ -1,10 +1,10 @@
- const { exec } = require('child_process');
+const { exec } = require('child_process');
 const sqlite3 = require('sqlite3').verbose();
 const db = new sqlite3.Database('./sellvpn.db');
 
 async function delssh(username, password, exp, iplimit, serverId) {
   if (/\s/.test(username) || /[^a-zA-Z0-9]/.test(username)) {
-    return { message: '❌ Username tidak valid. Mohon gunakan hanya huruf dan angka tanpa spasi.', daysLeft: 0 };
+    return { message: '❌ Username tidak valid.', daysLeft: 0 };
   }
 
   return new Promise((resolve) => {
@@ -22,8 +22,14 @@ async function delssh(username, password, exp, iplimit, serverId) {
         try {
           d = JSON.parse(stdout);
         } catch (e) {
-          return resolve({ message: '❌ Format respon dari server tidak valid.', daysLeft: 0 });
+          return resolve({ message: '❌ Gagal membaca respons dari server.', daysLeft: 0 });
         }
+
+        // --- BLOK DEBUG ---
+        console.log(`--- DEBUG: API Response for user ${username} ---`);
+        console.log(JSON.stringify(d, null, 2));
+        console.log('---------------------------------');
+        // ------------------
 
         if (d?.meta?.code !== 200 || !d.data) {
           const errMsg = d?.message || d?.meta?.message || 'Gagal menghapus akun.';
@@ -31,8 +37,9 @@ async function delssh(username, password, exp, iplimit, serverId) {
         }
 
         const s = d.data;
-        // PENTING: Ganti 'days_left' jika nama field dari API Anda berbeda
-        const daysLeft = s.days_left || 0; 
+        // Mencoba menebak beberapa nama field yang umum untuk sisa hari
+        const daysLeft = s.days_left || s.sisa_hari || s.remaining_days || s.daysLeft || 0;
+        
         const msg = `✅ *Akun Berhasil Dihapus*
 
 🗑️ **Detail Akun**
@@ -49,7 +56,7 @@ async function delssh(username, password, exp, iplimit, serverId) {
 
 async function delvmess(username, exp, quota, limitip, serverId) {
     if (/\s/.test(username) || /[^a-zA-Z0-9]/.test(username)) {
-        return { message: '❌ Username tidak valid. Mohon gunakan hanya huruf dan angka tanpa spasi.', daysLeft: 0 };
+        return { message: '❌ Username tidak valid.', daysLeft: 0 };
     }
 
     return new Promise((resolve) => {
@@ -67,8 +74,14 @@ async function delvmess(username, exp, quota, limitip, serverId) {
                 try {
                     d = JSON.parse(stdout);
                 } catch (e) {
-                    return resolve({ message: '❌ Format respon dari server tidak valid.', daysLeft: 0 });
+                    return resolve({ message: '❌ Gagal membaca respons dari server.', daysLeft: 0 });
                 }
+
+                // --- BLOK DEBUG ---
+                console.log(`--- DEBUG: API Response for user ${username} ---`);
+                console.log(JSON.stringify(d, null, 2));
+                console.log('---------------------------------');
+                // ------------------
 
                 if (d?.meta?.code !== 200 || !d.data) {
                     const errMsg = d?.message || d?.meta?.message || 'Gagal menghapus akun.';
@@ -76,8 +89,9 @@ async function delvmess(username, exp, quota, limitip, serverId) {
                 }
 
                 const s = d.data;
-                // PENTING: Ganti 'days_left' jika nama field dari API Anda berbeda
-                const daysLeft = s.days_left || 0;
+                // Mencoba menebak beberapa nama field yang umum untuk sisa hari
+                const daysLeft = s.days_left || s.sisa_hari || s.remaining_days || s.daysLeft || 0;
+                
                 const msg = `✅ *Akun Berhasil Dihapus*
 
 🗑️ **Detail Akun**
@@ -94,7 +108,7 @@ async function delvmess(username, exp, quota, limitip, serverId) {
 
 async function delvless(username, exp, quota, limitip, serverId) {
     if (/\s/.test(username) || /[^a-zA-Z0-9]/.test(username)) {
-        return { message: '❌ Username tidak valid. Mohon gunakan hanya huruf dan angka tanpa spasi.', daysLeft: 0 };
+        return { message: '❌ Username tidak valid.', daysLeft: 0 };
     }
 
     return new Promise((resolve) => {
@@ -112,8 +126,14 @@ async function delvless(username, exp, quota, limitip, serverId) {
                 try {
                     d = JSON.parse(stdout);
                 } catch (e) {
-                    return resolve({ message: '❌ Format respon dari server tidak valid.', daysLeft: 0 });
+                    return resolve({ message: '❌ Gagal membaca respons dari server.', daysLeft: 0 });
                 }
+                
+                // --- BLOK DEBUG ---
+                console.log(`--- DEBUG: API Response for user ${username} ---`);
+                console.log(JSON.stringify(d, null, 2));
+                console.log('---------------------------------');
+                // ------------------
 
                 if (d?.meta?.code !== 200 || !d.data) {
                     const errMsg = d?.message || d?.meta?.message || 'Gagal menghapus akun.';
@@ -121,8 +141,9 @@ async function delvless(username, exp, quota, limitip, serverId) {
                 }
 
                 const s = d.data;
-                // PENTING: Ganti 'days_left' jika nama field dari API Anda berbeda
-                const daysLeft = s.days_left || 0;
+                // Mencoba menebak beberapa nama field yang umum untuk sisa hari
+                const daysLeft = s.days_left || s.sisa_hari || s.remaining_days || s.daysLeft || 0;
+                
                 const msg = `✅ *Akun Berhasil Dihapus*
 
 🗑️ **Detail Akun**
@@ -139,7 +160,7 @@ async function delvless(username, exp, quota, limitip, serverId) {
 
 async function deltrojan(username, exp, quota, limitip, serverId) {
     if (/\s/.test(username) || /[^a-zA-Z0-9]/.test(username)) {
-        return { message: '❌ Username tidak valid. Mohon gunakan hanya huruf dan angka tanpa spasi.', daysLeft: 0 };
+        return { message: '❌ Username tidak valid.', daysLeft: 0 };
     }
 
     return new Promise((resolve) => {
@@ -157,8 +178,14 @@ async function deltrojan(username, exp, quota, limitip, serverId) {
                 try {
                     d = JSON.parse(stdout);
                 } catch (e) {
-                    return resolve({ message: '❌ Format respon dari server tidak valid.', daysLeft: 0 });
+                    return resolve({ message: '❌ Gagal membaca respons dari server.', daysLeft: 0 });
                 }
+
+                // --- BLOK DEBUG ---
+                console.log(`--- DEBUG: API Response for user ${username} ---`);
+                console.log(JSON.stringify(d, null, 2));
+                console.log('---------------------------------');
+                // ------------------
 
                 if (d?.meta?.code !== 200 || !d.data) {
                     const errMsg = d?.message || d?.meta?.message || 'Gagal menghapus akun.';
@@ -166,8 +193,9 @@ async function deltrojan(username, exp, quota, limitip, serverId) {
                 }
 
                 const s = d.data;
-                // PENTING: Ganti 'days_left' jika nama field dari API Anda berbeda
-                const daysLeft = s.days_left || 0;
+                // Mencoba menebak beberapa nama field yang umum untuk sisa hari
+                const daysLeft = s.days_left || s.sisa_hari || s.remaining_days || s.daysLeft || 0;
+                
                 const msg = `✅ *Akun Berhasil Dihapus*
 
 🗑️ **Detail Akun**
@@ -184,7 +212,7 @@ async function deltrojan(username, exp, quota, limitip, serverId) {
 
 async function delshadowsocks(username, exp, quota, limitip, serverId) {
     if (/\s/.test(username) || /[^a-zA-Z0-9]/.test(username)) {
-        return { message: '❌ Username tidak valid. Mohon gunakan hanya huruf dan angka tanpa spasi.', daysLeft: 0 };
+        return { message: '❌ Username tidak valid.', daysLeft: 0 };
     }
 
     return new Promise((resolve) => {
@@ -194,7 +222,6 @@ async function delshadowsocks(username, exp, quota, limitip, serverId) {
             }
 
             const { domain, auth, nama_server } = server;
-            // Asumsi endpoint delete shadowsocks, sesuaikan jika berbeda
             const web_URL = `http://${domain}/vps/deleteshadowsocks`;
             const curlCommand = `curl -s -X DELETE "${web_URL}/${username}" -H "Authorization: ${auth}" -H "accept: application/json"`;
 
@@ -203,17 +230,24 @@ async function delshadowsocks(username, exp, quota, limitip, serverId) {
                 try {
                     d = JSON.parse(stdout);
                 } catch (e) {
-                    return resolve({ message: '❌ Format respon dari server tidak valid.', daysLeft: 0 });
+                    return resolve({ message: '❌ Gagal membaca respons dari server.', daysLeft: 0 });
                 }
 
+                // --- BLOK DEBUG ---
+                console.log(`--- DEBUG: API Response for user ${username} ---`);
+                console.log(JSON.stringify(d, null, 2));
+                console.log('---------------------------------');
+                // ------------------
+                
                 if (d?.meta?.code !== 200 || !d.data) {
                     const errMsg = d?.message || d?.meta?.message || 'Gagal menghapus akun.';
                     return resolve({ message: `❌ Gagal: ${errMsg}`, daysLeft: 0 });
                 }
 
                 const s = d.data;
-                // PENTING: Ganti 'days_left' jika nama field dari API Anda berbeda
-                const daysLeft = s.days_left || 0;
+                // Mencoba menebak beberapa nama field yang umum untuk sisa hari
+                const daysLeft = s.days_left || s.sisa_hari || s.remaining_days || s.daysLeft || 0;
+                
                 const msg = `✅ *Akun Berhasil Dihapus*
 
 🗑️ **Detail Akun**
