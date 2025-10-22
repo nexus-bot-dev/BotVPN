@@ -246,6 +246,30 @@ db.run(`CREATE TABLE IF NOT EXISTS transactions (
 const userState = {};
 logger.info('User state initialized');
 
+// --- Fungsi Bantuan Refund ---
+async function getServerPrice(serverId) {
+    return new Promise((resolve, reject) => {
+        db.get('SELECT harga FROM Server WHERE id = ?', [serverId], (err, row) => {
+            if (err) return reject(err);
+            resolve(row ? row.harga : 0);
+        });
+    });
+}
+
+async function updateUserBalance(userId, saldo) {
+  return new Promise((resolve, reject) => {
+    db.run('UPDATE users SET saldo = saldo + ? WHERE user_id = ?', [saldo, userId], function (err) {
+      if (err) {
+        logger.error('⚠️ Kesalahan saat menambahkan saldo user:', err.message);
+        reject(err);
+      } else {
+        resolve();
+      }
+    });
+  });
+}
+// -------------------------------------
+
 bot.command(['start', 'menu'], async (ctx) => {
   logger.info('Start or Menu command received');
   
@@ -354,27 +378,26 @@ ID: <code>${userId}</code>
 Saldo: <code>Rp ${saldo}</code>
 Status: <code>${statusReseller}</code>
 
-<blockquote>📊 <b>Statistik Anda</b>
-• Hari Ini   : ${userToday} akun
-• Minggu Ini  : ${userWeek} akun
-• Bulan Ini   : ${userMonth} akun
+> 📊 **Statistik Anda**
+> • Hari Ini   : ${userToday} akun
+> • Minggu Ini  : ${userWeek} akun
+> • Bulan Ini   : ${userMonth} akun
+> 
+> 🌐 **Statistik Global**
+> • Hari Ini   : ${globalToday} akun
+> • Minggu Ini  : ${globalWeek} akun
+> • Bulan Ini   : ${globalMonth} akun
 
-🌐 <b>Statistik Global</b>
-• Hari Ini   : ${globalToday} akun
-• Minggu Ini  : ${globalWeek} akun
-• Bulan Ini   : ${globalMonth} akun
-</blockquote>
-
-⚙️ <b>COMMAND</b>
+⚙️ **COMMAND**
 • 🏠 Menu Utama   : /start
 • 🔑 Menu Admin   : /admin
 • 🛡️ Admin Panel  : /helpadmin
 
-👨‍💻 <b>Pembuat:</b> @ARI_VPN_STORE
-🛠️ <b>Credit:</b> ARI STORE × API POTATO
-🔧 <b>Base:</b> FighterTunnel
-👥 <b>Pengguna BOT:</b> ${jumlahPengguna}
-⏱️ <b>Latency:</b> ${latency} ms
+👨‍💻 **Pembuat:** @ARI_VPN_STORE
+🛠️ **Credit:** ARI STORE × API POTATO
+🔧 **Base:** FighterTunnel
+👥 **Pengguna BOT:** ${jumlahPengguna}
+⏱️ **Latency:** ${latency} ms
 ──────────────────────────`;
 
   const keyboard = [
@@ -1559,17 +1582,16 @@ async function sendCreationNotification(ctx, state, totalHarga) {
         const expiryDate = new Date(Date.now() + state.exp * 24 * 60 * 60 * 1000).toLocaleString('id-ID', { timeZone: 'Asia/Jakarta' });
 
         const message = `
-✅ <b>Akun Baru Dibuat!</b>
-<blockquote>
-👤 <b>Dibuat Oleh:</b> ${userIdentifier}
-🔧 <b>Tipe Akun:</b> ${state.type.toUpperCase()}
-🖥️ <b>Server:</b> ${serverName}
-🆔 <b>Username:</b> <code>${state.username}</code>
-💰 <b>Harga:</b> Rp ${totalHarga}
-🗓️ <b>Tanggal Buat:</b> ${creationDate}
-⏳ <b>Masa Aktif:</b> ${state.exp} hari
-🔚 <b>Kedaluwarsa:</b> ${expiryDate}
-</blockquote>
+✅ **Akun Baru Dibuat!**
+> 
+> 👤 **Dibuat Oleh:** ${userIdentifier}
+> 🔧 **Tipe Akun:** ${state.type.toUpperCase()}
+> 🖥️ **Server:** ${serverName}
+> 🆔 **Username:** \`${state.username}\`
+> 💰 **Harga:** Rp ${totalHarga}
+> 🗓️ **Tanggal Buat:** ${creationDate}
+> ⏳ **Masa Aktif:** ${state.exp} hari
+> 🔚 **Kedaluwarsa:** ${expiryDate}
         `;
         
         await bot.telegram.sendMessage(GROUP_ID, message, { parse_mode: 'HTML' });
@@ -1755,75 +1777,75 @@ fs.readFile(resselDbPath, 'utf8', async (err, data) => {
     }});
     return; // Penting! Jangan lanjut ke case lain
   }
-  if (state.step.startsWith('username_del_')) {
-    const username = text;
-    // Validasi username (hanya huruf kecil dan angka, 3-20 karakter)
-    if (!/^[a-z0-9]{3,20}$/.test(username)) {
-      return ctx.reply('❌ *Username tidak valid. Gunakan huruf kecil dan angka (3–20 karakter).*', { parse_mode: 'Markdown' });
-    }
-       //izin ressel saja
-    const resselDbPath = './ressel.db';
-    fs.readFile(resselDbPath, 'utf8', async (err, data) => {
-      if (err) {
-        logger.error('❌ Gagal membaca file ressel.db:', err.message);
-        return ctx.reply('❌ *Terjadi kesalahan saat membaca data reseller.*', { parse_mode: 'Markdown' });
-      }
+ if (state.step.startsWith('username_del_')) {
+    const username = text;
+    // Validasi username (hanya huruf kecil dan angka, 3-20 karakter)
+    if (!/^[a-z0-9]{3,20}$/.test(username)) {
+      return ctx.reply('❌ *Username tidak valid. Gunakan huruf kecil dan angka (3–20 karakter).*', { parse_mode: 'Markdown' });
+    }
+        //izin ressel saja
+    const resselDbPath = './ressel.db';
+    fs.readFile(resselDbPath, 'utf8', async (err, data) => {
+      if (err) {
+        logger.error('❌ Gagal membaca file ressel.db:', err.message);
+        return ctx.reply('❌ *Terjadi kesalahan saat membaca data reseller.*', { parse_mode: 'Markdown' });
+      }
 
-      const idUser = ctx.from.id.toString().trim();
-      const resselList = data.split('\n').map(line => line.trim()).filter(Boolean);
+      const idUser = ctx.from.id.toString().trim();
+      const resselList = data.split('\n').map(line => line.trim()).filter(Boolean);
 
-      console.log('🧪 ID Pengguna:', idUser);
-      console.log('📂 Daftar Ressel:', resselList);
+      console.log('🧪 ID Pengguna:', idUser);
+      console.log('📂 Daftar Ressel:', resselList);
 
-      const isRessel = resselList.includes(idUser);
+      const isRessel = resselList.includes(idUser);
 
-      if (!isRessel) {
-        return ctx.reply('❌ *Fitur ini hanya untuk Ressel VPN.*', { parse_mode: 'Markdown' });
-      }
-  //izin ressel saja
-    const { type, serverId } = state;
-    delete userState[ctx.chat.id];
+      if (!isRessel) {
+        return ctx.reply('❌ *Fitur ini hanya untuk Ressel VPN.*', { parse_mode: 'Markdown' });
+      }
+  //izin ressel saja
+    const { type, serverId } = state;
+    delete userState[ctx.chat.id];
 
-    let msg = 'none';
-    let deleteResult = null;
-    let daysLeft = 0; // Variabel untuk menyimpan sisa hari
+    let msg = 'none';
+    let deleteResult = null;
+    let daysLeft = 0; // Variabel untuk menyimpan sisa hari
 
-    try {
-      const password = 'none', exp = 'none', iplimit = 'none';
+    try {
+      const password = 'none', exp = 'none', iplimit = 'none';
 
-      const delFunctions = {
-        vmess: delvmess,
-        vless: delvless,
-        trojan: deltrojan,
-        shadowsocks: delshadowsocks,
-        ssh: delssh
-      };
+      const delFunctions = {
+        vmess: delvmess,
+        vless: delvless,
+        trojan: deltrojan,
+        shadowsocks: delshadowsocks,
+        ssh: delssh
+      };
 
-      if (delFunctions[type]) {
-        // Asumsikan delFunctions[type] mengembalikan objek { message: '...', daysLeft: N }
-        deleteResult = await delFunctions[type](username, password, exp, iplimit, serverId);
-        msg = deleteResult.message || deleteResult; // Ambil pesan untuk di-reply
+      if (delFunctions[type]) {
+        // Asumsikan delFunctions[type] mengembalikan objek { message: '...', daysLeft: N }
+        deleteResult = await delFunctions[type](username, password, exp, iplimit, serverId);
+        msg = deleteResult.message || deleteResult; // Ambil pesan untuk di-reply
 
-        // Cek apakah hasil mengandung sisa hari (parsing objek atau string)
-        if (typeof deleteResult === 'object' && deleteResult.daysLeft > 0) {
-            daysLeft = deleteResult.daysLeft;
-        } else if (typeof deleteResult === 'string' && deleteResult.match(/Sisa Hari: (\d+)/)) {
-            daysLeft = parseInt(deleteResult.match(/Sisa Hari: (\d+)/)[1]);
-        }
-      }
-      
-      // --- PERBAIKAN 1: LOGIC REFUND SALDO DAN UPDATE TOTAL AKUN ---
-      if (msg.includes('✅') && daysLeft > 0) {
-        const dailyPrice = await getServerPrice(serverId); // Ambil harga harian dari DB
-        const refundAmount = dailyPrice * daysLeft; // Hitung refund proporsional
+        // Cek apakah hasil mengandung sisa hari (parsing objek atau string)
+        if (typeof deleteResult === 'object' && deleteResult.daysLeft > 0) {
+            daysLeft = deleteResult.daysLeft;
+        } else if (typeof deleteResult === 'string' && deleteResult.match(/Sisa Hari: (\d+)/)) {
+            daysLeft = parseInt(deleteResult.match(/Sisa Hari: (\d+)/)[1]);
+        }
+      }
+      
+      // --- LOGIC REFUND SALDO DAN UPDATE TOTAL AKUN ---
+      if (msg.includes('✅') && daysLeft > 0) {
+        const dailyPrice = await getServerPrice(serverId); // Ambil harga harian dari DB
+        const refundAmount = dailyPrice * daysLeft; // Hitung refund proporsional
 
-        if (refundAmount > 0) {
-            await updateUserBalance(ctx.from.id, refundAmount); // Tambahkan saldo ke user
-            // Catat transaksi refund
-            const referenceId = `refund-${type}-${ctx.from.id}-${Date.now()}`;
-            db.run('INSERT INTO transactions (user_id, amount, type, reference_id, timestamp) VALUES (?, ?, ?, ?, ?)',
-                [ctx.from.id, refundAmount, 'refund', referenceId, Date.now()]);
-            
+        if (refundAmount > 0) {
+            await updateUserBalance(ctx.from.id, refundAmount); // Tambahkan saldo ke user
+            // Catat transaksi refund
+            const referenceId = `refund-${type}-${ctx.from.id}-${Date.now()}`;
+            db.run('INSERT INTO transactions (user_id, amount, type, reference_id, timestamp) VALUES (?, ?, ?, ?, ?)',
+                [ctx.from.id, refundAmount, 'refund', referenceId, Date.now()]);
+            
                 // Kurangi total akun yang dibuat di server karena satu sudah dihapus
                 db.run('UPDATE Server SET total_create_akun = total_create_akun - 1 WHERE id = ? AND total_create_akun > 0', [serverId], (err) => {
                     if (err) {
@@ -1831,24 +1853,24 @@ fs.readFile(resselDbPath, 'utf8', async (err, data) => {
                     }
                 });
 
-            // Tambahkan notifikasi ke pesan balasan
-            msg += `\n\n💰 **REFUND SALDO**\n` +
-                   `• Sisa Hari: \`${daysLeft}\` hari\n` +
-                   `• Harga Harian: \`Rp ${dailyPrice}\`\n` +
-                   `• **Total Refund: \`Rp ${refundAmount}\`**`;
-            logger.info(`✅ Refund saldo Rp ${refundAmount} ke user ${ctx.from.id} karena delete akun ${type}.`);
-        }
-      }
-      // --- AKHIR PERBAIKAN 1 ---
+            // Tambahkan notifikasi ke pesan balasan
+            msg += `\n\n💰 **REFUND SALDO**\n` +
+                   `• Sisa Hari: \`${daysLeft}\` hari\n` +
+                   `• Harga Harian: \`Rp ${dailyPrice}\`\n` +
+                   `• **Total Refund: \`Rp ${refundAmount}\`**`;
+            logger.info(`✅ Refund saldo Rp ${refundAmount} ke user ${ctx.from.id} karena delete akun ${type}.`);
+        }
+      }
+      // --- AKHIR LOGIC REFUND ---
 
-      await ctx.reply(msg, { parse_mode: 'Markdown' });
-      logger.info(`✅ Akun ${type} berhasil dihapus oleh ${ctx.from.id}`);
-    } catch (err) {
-      logger.error('❌ Gagal hapus akun:', err.message);
-      await ctx.reply('❌ *Terjadi kesalahan saat menghapus akun.*', { parse_mode: 'Markdown' });
-    }});
-    return; // Penting! Jangan lanjut ke case lain
-  }
+      await ctx.reply(msg, { parse_mode: 'Markdown' });
+      logger.info(`✅ Akun ${type} berhasil dihapus oleh ${ctx.from.id}`);
+    } catch (err) {
+      logger.error('❌ Gagal hapus akun:', err.message);
+      await ctx.reply('❌ *Terjadi kesalahan saat menghapus akun.*', { parse_mode: 'Markdown' });
+    }});
+    return; // Penting! Jangan lanjut ke case lain
+  }
   if (state.step.startsWith('username_')) {
     state.username = text;
 
@@ -3214,30 +3236,6 @@ async function handleEditField(ctx, userStateData, data, field, fieldName, query
     });
   }
 }
-async function updateUserBalance(userId, saldo) {
-  return new Promise((resolve, reject) => {
-    db.run('UPDATE users SET saldo = saldo + ? WHERE user_id = ?', [saldo, userId], function (err) {
-      if (err) {
-        logger.error('⚠️ Kesalahan saat menambahkan saldo user:', err.message);
-        reject(err);
-      } else {
-        resolve();
-      }
-    });
-  });
-}
-
-// --- Fungsi Bantuan Refund ---
-async function getServerPrice(serverId) {
-    return new Promise((resolve, reject) => {
-        db.get('SELECT harga FROM Server WHERE id = ?', [serverId], (err, row) => {
-            if (err) return reject(err);
-            resolve(row ? row.harga : 0);
-        });
-    });
-}
-// -------------------------------------
-
 async function updateServerField(serverId, value, query) {
   return new Promise((resolve, reject) => {
     db.run(query, [value, serverId], function (err) {
@@ -3629,15 +3627,15 @@ async function processMatchingPayment(deposit, matchingTransaction, uniqueCode) 
           : `${username}`;
         await bot.telegram.sendMessage(
           GROUP_ID,
-          `<blockquote>
-✅ <b>Top Up Berhasil (Otomatis)</b>
-👤 User: ${userDisplay}
-💰 Nominal Asli: <b>Rp ${deposit.originalAmount}</b>
-🎁 Bonus: <b>Rp ${bonusAmount}</b>
-💵 Total Ditambahkan: <b>Rp ${finalCredit}</b>
-🏦 Saldo Sekarang: <b>Rp ${user.saldo}</b>
-🕒 Waktu: ${new Date().toLocaleString('id-ID', { timeZone: 'Asia/Jakarta' })}
-</blockquote>`,
+          `> 
+> ✅ **Top Up Berhasil (Otomatis)**
+> 👤 User: ${userDisplay}
+> 💰 Nominal Asli: **Rp ${deposit.originalAmount}**
+> 🎁 Bonus: **Rp ${bonusAmount}**
+> 💵 Total Ditambahkan: **Rp ${finalCredit}**
+> 🏦 Saldo Sekarang: **Rp ${user.saldo}**
+> 🕒 Waktu: ${new Date().toLocaleString('id-ID', { timeZone: 'Asia/Jakarta' })}
+`,
           { parse_mode: 'HTML' }
         );
       } catch (e) { logger.error('Gagal kirim notif top up ke grup:', e.message); }
