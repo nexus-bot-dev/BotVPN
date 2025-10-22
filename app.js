@@ -1,4 +1,4 @@
-const os = require('os');
+ const os = require('os');
 const sqlite3 = require('sqlite3').verbose();
 const express = require('express');
 const { Telegraf } = require('telegraf');
@@ -111,6 +111,7 @@ async function saveTrialAccess(userId) {
 
 
 const fs = require('fs');
+const { exec } = require('child_process');
 const vars = JSON.parse(fs.readFileSync('./.vars.json', 'utf8'));
 
 const BOT_TOKEN = vars.BOT_TOKEN;
@@ -122,9 +123,12 @@ const MERCHANT_ID = vars.MERCHANT_ID;
 const API_KEY = vars.API_KEY;
 const GROUP_ID = vars.GROUP_ID;
 
-// PENTING: Inisialisasi variabel Bonus Top-Up dari .vars.json (atau default 0)
+// PENTING: Inisialisasi variabel Bonus Top-Up dan Minimal Top-Up dari .vars.json
 let topUpBonusPercentage = vars.TOP_UP_BONUS_PERCENTAGE || 0; 
+let minTopUpAmount = vars.MIN_TOP_UP_AMOUNT || 5000; // Default 5000
+
 logger.info(`Top-Up Bonus set to: ${topUpBonusPercentage}%`);
+logger.info(`Min Top Up set to: Rp ${minTopUpAmount}`);
 
 const bot = new Telegraf(BOT_TOKEN);
 const adminIds = ADMIN;
@@ -459,8 +463,40 @@ bot.command('setbonus', async (ctx) => {
 
     await ctx.reply(`✅ Bonus Top Up berhasil diatur ke **${percentage}%**.\n\nStatus Bonus Top Up: **${percentage}%**.\n\nSetiap Top Up sebesar \`Rp 10.000\` akan mendapat bonus \`Rp ${Math.floor(10000 * percentage / 100)}\`.`, { parse_mode: 'Markdown' });
 });
-// ------------------------------------------
 
+// --- Tambahan Fitur: Command /setmintopup ---
+bot.command('setmintopup', async (ctx) => {
+    const userId = ctx.message.from.id;
+    if (!adminIds.includes(userId)) {
+        return ctx.reply('⚠️ Anda tidak memiliki izin untuk menggunakan perintah ini.', { parse_mode: 'Markdown' });
+    }
+
+    const args = ctx.message.text.split(' ');
+    if (args.length !== 2) {
+        return ctx.reply(`⚠️ Format salah. Gunakan: \`/setmintopup <nominal>\`\n\nContoh: \`/setmintopup 15000\` (minimal Rp 15.000)`, { parse_mode: 'Markdown' });
+    }
+
+    const nominal = parseInt(args[1]);
+
+    if (isNaN(nominal) || nominal < 1000) {
+        return ctx.reply('⚠️ Nominal harus berupa angka dan minimal Rp 1.000.', { parse_mode: 'Markdown' });
+    }
+
+    minTopUpAmount = nominal;
+    
+    try {
+        const currentVars = JSON.parse(fs.readFileSync('./.vars.json', 'utf8'));
+        currentVars.MIN_TOP_UP_AMOUNT = nominal;
+        fs.writeFileSync('./.vars.json', JSON.stringify(currentVars, null, 2));
+        logger.info(`MIN_TOP_UP_AMOUNT updated in .vars.json to Rp ${nominal}`);
+    } catch (e) {
+        logger.error('Gagal update MIN_TOP_UP_AMOUNT di .vars.json:', e.message);
+    }
+
+
+    await ctx.reply(`✅ Minimal Top Up berhasil diatur ke **Rp ${nominal}**.\n\nPengguna tidak dapat Top Up di bawah nominal ini.`, { parse_mode: 'Markdown' });
+});
+// ------------------------------------------
 
 bot.command('hapuslog', async (ctx) => {
   if (!adminIds.includes(ctx.from.id)) return ctx.reply('Tidak ada izin!');
@@ -497,9 +533,11 @@ bot.command('helpadmin', async (ctx) => {
 12. /editnama - Mengedit nama server.
 13. /edittotalcreate - Mengedit total pembuatan akun server.
 14. /hapuslog - Menghapus log bot.
-15. /setbonus - *Mengatur persentase bonus top up.*
+15. /setbonus - Mengatur persentase bonus top up.
+16. /setmintopup - *Mengatur nominal minimal top up.*
 
 *Status Bonus Top Up: ${topUpBonusPercentage}%*
+*Minimal Top Up: Rp ${minTopUpAmount}*
 
 Gunakan perintah ini dengan format yang benar untuk menghindari kesalahan.
 `;
@@ -1081,8 +1119,6 @@ bot.action('service_unlock', async (ctx) => {
   } 
   await handleServiceAction(ctx, 'unlock');
 });
-
-const { exec } = require('child_process');
 
 bot.action('cek_service', async (ctx) => {
   try {
@@ -1731,18 +1767,19 @@ fs.readFile(resselDbPath, 'utf8', async (err, data) => {
         }
       }
       
-      // >>>>>>>>>>>>> LOGIC REFUND SALDO DI SINI <<<<<<<<<<<<<
+      // >>>>>>>>>>>>> LOGIC REFUND SALDO: MENGGUNAKAN daysLeft <<<<<<<<<<<<<
       if (msg.includes('✅') && daysLeft > 0) {
-        const dailyPrice = await getServerPrice(serverId);
-        const refundAmount = dailyPrice * daysLeft;
+        const dailyPrice = await getServerPrice(serverId); // Ambil harga harian dari DB
+        const refundAmount = dailyPrice * daysLeft; // Hitung refund proporsional
 
         if (refundAmount > 0) {
-            await updateUserBalance(ctx.from.id, refundAmount);
-            // Record refund transaction
+            await updateUserBalance(ctx.from.id, refundAmount); // Tambahkan saldo ke user
+            // Catat transaksi refund
             const referenceId = `refund-${type}-${ctx.from.id}-${Date.now()}`;
             db.run('INSERT INTO transactions (user_id, amount, type, reference_id, timestamp) VALUES (?, ?, ?, ?, ?)',
                 [ctx.from.id, refundAmount, 'refund', referenceId, Date.now()]);
             
+            // Tambahkan notifikasi ke pesan balasan
             msg += `\n\n💰 **REFUND SALDO**\n` +
                    `• Sisa Hari: \`${daysLeft}\` hari\n` +
                    `• Harga Harian: \`Rp ${dailyPrice}\`\n` +
@@ -2728,12 +2765,12 @@ bot.action('topup_saldo', async (ctx) => {
     }
     global.depositState[userId] = { action: 'request_amount', amount: '' };
     
-    logger.info(`🔍 User ${userId} diminta untuk memasukkan jumlah nominal saldo.`);
+    logger.info(`🔍 User ${userId} diminta untuk memasukkan jumlah nominal saldo. Minimal Top Up: Rp ${minTopUpAmount}`);
     
 
     const keyboard = keyboard_nomor();
     
-    await ctx.editMessageText('💰 *Silakan masukkan jumlah nominal saldo yang Anda ingin tambahkan ke akun Anda:*', {
+    await ctx.editMessageText(`💰 *Silakan masukkan jumlah nominal saldo yang Anda ingin tambahkan ke akun Anda:*\n\nMinimal Top Up: **Rp ${minTopUpAmount}**`, {
       reply_markup: {
         inline_keyboard: keyboard
       },
@@ -2941,8 +2978,9 @@ async function handleDepositState(ctx, userId, data) {
     if (currentAmount.length === 0) {
       return await ctx.answerCbQuery('⚠️ Jumlah tidak boleh kosong!', { show_alert: true });
     }
-    if (parseInt(currentAmount) < 5000) {
-      return await ctx.answerCbQuery('⚠️ Jumlah minimal adalah 5.000 !', { show_alert: true });
+    // FIX: Menggunakan variabel minTopUpAmount yang diset Admin
+    if (parseInt(currentAmount) < minTopUpAmount) {
+      return await ctx.answerCbQuery(`⚠️ Jumlah minimal adalah Rp ${minTopUpAmount} !`, { show_alert: true });
     }
     global.depositState[userId].action = 'confirm_amount';
     await processDeposit(ctx, currentAmount);
@@ -2956,7 +2994,7 @@ async function handleDepositState(ctx, userId, data) {
   }
 
   global.depositState[userId].amount = currentAmount;
-  const newMessage = `💰 *Silakan masukkan jumlah nominal saldo yang Anda ingin tambahkan ke akun Anda:*\n\nJumlah saat ini: *Rp ${currentAmount || '0'}*`;
+  const newMessage = `💰 *Silakan masukkan jumlah nominal saldo yang Anda ingin tambahkan ke akun Anda:*\n\nMinimal Top Up: **Rp ${minTopUpAmount}**\n\nJumlah saat ini: *Rp ${currentAmount || '0'}*`;
   
   try {
   if (newMessage !== ctx.callbackQuery.message.text) {
@@ -3130,7 +3168,7 @@ async function updateUserBalance(userId, saldo) {
   });
 }
 
-// --- Fungsi Bantuan Refund (Baru) ---
+// --- Fungsi Bantuan Refund ---
 async function getServerPrice(serverId) {
     return new Promise((resolve, reject) => {
         db.get('SELECT harga FROM Server WHERE id = ?', [serverId], (err, row) => {
@@ -3194,29 +3232,34 @@ async function processDeposit(ctx, amount) {
   const uniqueCode = `user-${userId}-${Date.now()}`;
 
   // Generate final amount with random suffix
-  const finalAmount = Number(amount) + generateRandomNumber(1, 300);
-  const adminFee = finalAmount - Number(amount)
+  const adminFee = generateRandomNumber(1, 300);
+  const finalAmount = Number(amount) + adminFee;
+  
   try {
     const urlQr = DATA_QRIS; // QR destination
-   // console.log('🔍 CEK DATA_QRIS:', urlQr);
     const axios = require('axios');
 
-const bayar = await axios.get(`https://api.rajaserverpremium.web.id/orderkuota/createpayment?apikey=AriApiPaymetGetwayMod&amount=${finalAmount}&codeqr=${urlQr}`);
-const get = bayar.data;
+    // Cek saldo user sebelum deposit untuk notifikasi
+    const saldoSebelumnya = await new Promise((resolve) => {
+        db.get('SELECT saldo FROM users WHERE user_id = ?', [userId], (err, row) => resolve(row ? row.saldo : 0));
+    });
 
-if (get.status !== 'success') {
-  throw new Error('Gagal membuat QRIS: ' + JSON.stringify(get));
-}
+    const bayar = await axios.get(`https://api.rajaserverpremium.web.id/orderkuota/createpayment?apikey=AriApiPaymetGetwayMod&amount=${finalAmount}&codeqr=${urlQr}`);
+    const get = bayar.data;
 
-const qrImageUrl = get.result.imageqris?.url;
+    if (get.status !== 'success') {
+      throw new Error('Gagal membuat QRIS: ' + JSON.stringify(get));
+    }
 
-if (!qrImageUrl || qrImageUrl.includes('undefined')) {
-  throw new Error('URL QRIS tidak valid: ' + qrImageUrl);
-}
+    const qrImageUrl = get.result.imageqris?.url;
 
-// Download gambar QR
-const qrResponse = await axios.get(qrImageUrl, { responseType: 'arraybuffer' });
-const qrBuffer = Buffer.from(qrResponse.data);
+    if (!qrImageUrl || qrImageUrl.includes('undefined')) {
+      throw new Error('URL QRIS tidak valid: ' + qrImageUrl);
+    }
+
+    // Download gambar QR
+    const qrResponse = await axios.get(qrImageUrl, { responseType: 'arraybuffer' });
+    const qrBuffer = Buffer.from(qrResponse.data);
 
     // Hitung bonus untuk ditampilkan
     const bonusAmount = topUpBonusPercentage > 0 ? Math.floor(Number(amount) * topUpBonusPercentage / 100) : 0;
@@ -3224,16 +3267,16 @@ const qrBuffer = Buffer.from(qrResponse.data);
 
     const caption =
       `📝 *Detail Pembayaran:*\n\n` +
-      `💰 Nominal Top Up: Rp ${amount}\n` +
-      `🎁 Bonus Saldo: Rp ${bonusAmount}\n` +
-      `💵 Total Saldo Diterima: Rp ${finalCredit}\n` +
+      `💳 Nominal Top Up: \`Rp ${amount}\`\n` +
+      `🔢 Kode Unik: \`Rp ${adminFee}\`\n` +
+      `💰 Total Bayar: \`Rp ${finalAmount}\`\n` +
+      `🎁 Bonus Saldo (${topUpBonusPercentage}%): \`Rp ${bonusAmount}\`\n` +
       `---------------------------------\n` +
-      `💸 *Total Pembayaran:* Rp ${finalAmount} (Nominal + Admin Fee Rp ${adminFee})\n` +
-      `⚠️ *Penting:* Mohon transfer **sesuai nominal** di atas!\n` +
+      `⚠️ *Penting:* Mohon transfer **sesuai nominal** di atas (\`Rp ${finalAmount}\`)!\n` +
       `⏱️ Waktu: 5 menit\n\n` +
       `⚠️ *Catatan:*\n` +
       `- Pembayaran akan otomatis terverifikasi\n` +
-      `- Jika pembayaran berhasil, saldo akan otomatis ditambahkan`;
+      `- Saldo akan otomatis ditambahkan (Nominal + Bonus)`;
 
     const qrMessage = await ctx.replyWithPhoto({ source: qrBuffer }, {
       caption: caption,
@@ -3247,12 +3290,13 @@ const qrBuffer = Buffer.from(qrResponse.data);
     }
 
         global.pendingDeposits[uniqueCode] = {
-          amount: finalAmount, // Jumlah yang harus dibayar
+          amount: finalAmount, // Jumlah yang harus dibayar (Nominal + Kode Unik)
           originalAmount: Number(amount), // Nominal saldo yang diminta
           userId,
           timestamp: Date.now(),
       status: 'pending',
-      qrMessageId: qrMessage.message_id
+      qrMessageId: qrMessage.message_id,
+      saldoSebelumnya: saldoSebelumnya // Simpan saldo sebelum transfer
     };
 
     db.run(
@@ -3335,7 +3379,7 @@ async function checkQRISStatus() {
         console.log('✅ Parsed transaksi:', transaksiList);
 
         // Cocokkan nominal
-        const expectedAmount = deposit.amount; // Jumlah yang harus dibayar (sudah termasuk admin fee)
+        const expectedAmount = deposit.amount; // Jumlah yang harus dibayar (Nominal + Kode Unik)
         const matched = transaksiList.find(t => t.kredit === expectedAmount);
 
         if (matched) {
@@ -3403,26 +3447,27 @@ function keyboard_full() {
 }
 
 global.processedTransactions = new Set();
-// --- FUNGSI NOTIFIKASI BERHASIL (DIPERBAIKI) ---
+// --- FUNGSI NOTIFIKASI BERHASIL (DIPERBAIKI SANGAT DETAIL) ---
 async function sendPaymentSuccessNotification(userId, deposit, currentBalance, bonusAmount, finalCredit) {
   try {
-    const adminFee = deposit.amount - deposit.originalAmount;
+    const nominalAsli = deposit.originalAmount;
+    const totalBayar = deposit.amount;
+    const kodeUnik = totalBayar - nominalAsli;
+    const saldoSebelumnya = deposit.saldoSebelumnya || 0;
     
-    // Format pesan lebih detail dan menarik
+    // Format pesan sesuai permintaan
     const message = 
-      `🎉 **TOP-UP BERHASIL! Saldo Anda Bertambah Otomatis!** 🎉\n\n` +
+      `🎉 **TOP UP BERHASIL! SALDO OTOMATIS MASUK!** 🎉\n\n` +
       `------------------------------------------\n` +
-      `💰 *Deposit Anda:*\n` +
-      ` • Nominal Transfer: \`Rp ${deposit.amount}\`\n` +
-      ` • Nominal Saldo Asli: \`Rp ${deposit.originalAmount}\`\n` +
-      ` • Biaya Admin: \`Rp ${adminFee}\`\n` +
+      `✅ **Top Up Berhasil!**\n\n` +
+      `💳 Nominal: \`Rp ${nominalAsli}\`\n` +
+      `🎁 Bonus (${topUpBonusPercentage}%): \`Rp ${bonusAmount}\`\n` +
+      `🔢 Kode Unik: \`Rp ${kodeUnik}\`\n` +
+      `💰 Total Bayar: \`Rp ${totalBayar}\`\n` +
       `------------------------------------------\n` +
-      `🎁 *Bonus:* \n` +
-      ` • Bonus Saldo: \`Rp ${bonusAmount}\`\n` +
-      ` • **Total Saldo Ditambahkan:** \`Rp ${finalCredit}\`\n` +
-      `------------------------------------------\n` +
-      `💳 **SALDO AKUN ANDA SEKARANG: \`Rp ${currentBalance}\`**\n\n` +
-      `Terima kasih telah Top-Up di ${NAMA_STORE}. Selamat berbelanja!`;
+      `📥 Saldo Sebelumnya: \`Rp ${saldoSebelumnya}\`\n` +
+      `📈 **Saldo Saat Ini:** \`Rp ${currentBalance}\`\n\n` +
+      `Terima kasih telah Top-Up di ${NAMA_STORE}.`;
 
     await bot.telegram.sendMessage(userId, message, { parse_mode: 'Markdown' });
     return true;
@@ -3455,14 +3500,14 @@ async function processMatchingPayment(deposit, matchingTransaction, uniqueCode) 
             return;
           }
 
-          // --- LOGIC BONUS TOP UP (BARU) ---
+          // --- LOGIC BONUS TOP UP ---
           const originalAmount = deposit.originalAmount;
           let bonusAmount = 0;
           if (topUpBonusPercentage > 0) {
             bonusAmount = Math.floor(originalAmount * topUpBonusPercentage / 100);
           }
           const finalCredit = originalAmount + bonusAmount;
-          // ---------------------------------
+          // --------------------------
 
           // Update user balance (MENGGUNAKAN finalCredit)
           db.run('UPDATE users SET saldo = saldo + ? WHERE user_id = ?', 
@@ -3493,6 +3538,7 @@ async function processMatchingPayment(deposit, matchingTransaction, uniqueCode) 
                       reject(err);
                       return;
                     }
+                    
                     // Send notification using sendPaymentSuccessNotification
     const notificationSent = await sendPaymentSuccessNotification(
       deposit.userId,
@@ -3512,7 +3558,6 @@ async function processMatchingPayment(deposit, matchingTransaction, uniqueCode) 
     if (notificationSent) {
       // Notifikasi ke grup untuk top up
       try {
-        // Pada notifikasi ke grup (top up dan pembelian/renew), ambil info user:
         let userInfo;
         try {
           userInfo = await bot.telegram.getChat(deposit.userId);
